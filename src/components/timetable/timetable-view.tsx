@@ -78,6 +78,19 @@ interface Entry {
 
 const HOUR_SLOTS = Array.from({ length: 14 }, (_, i) => i + 6); // 6…19
 
+const DAY_NAMES = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** "Monday, 3 March" — locale-independent, avoids SSR/client hydration mismatches. */
+function fullDayStr(date: Date): string {
+  return `${DAY_NAMES[date.getDay()]}, ${date.getDate()} ${MONTH_NAMES[date.getMonth()]}`;
+}
+
 function fmtHour(h: number) {
   return `${String(h).padStart(2, "0")}:00`;
 }
@@ -98,6 +111,7 @@ interface CellProps {
   isToday: boolean;
   isEditing: boolean;
   isDark: boolean;
+  cellAriaLabel: string;
   draft: string;
   draftColor: ColorId;
   onActivate: () => void;
@@ -114,6 +128,7 @@ function TimetableCell({
   isToday,
   isEditing,
   isDark,
+  cellAriaLabel,
   draft,
   draftColor,
   onActivate,
@@ -144,6 +159,7 @@ function TimetableCell({
   return (
     <td
       onClick={!isEditing ? onActivate : undefined}
+      aria-label={cellAriaLabel}
       style={activeBg ? { backgroundColor: activeBg } : undefined}
       className={cn(
         "relative group border-b border-r last:border-r-0 h-14 p-1 align-top transition-colors",
@@ -357,14 +373,14 @@ export default function TimetableView() {
   return (
     <div className="flex flex-col gap-4">
       {/* ── Week navigator ── */}
-      <div className="flex items-center gap-2">
+      <nav aria-label="Week navigation" className="flex items-center gap-2">
         <Button
           variant="outline"
           size="icon"
           onClick={() => setWeekStart((d) => shiftDays(d, -7))}
           aria-label="Previous week"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
         </Button>
 
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
@@ -372,9 +388,10 @@ export default function TimetableView() {
             <Button
               variant="outline"
               className="gap-2 min-w-[260px] justify-center font-medium"
+              aria-label={`Open date picker, week of ${weekLabel}`}
             >
-              <CalendarDays className="h-4 w-4 shrink-0" />
-              {weekLabel}
+              <CalendarDays className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span aria-hidden="true">{weekLabel}</span>
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto p-0" align="center">
@@ -398,7 +415,7 @@ export default function TimetableView() {
           onClick={() => setWeekStart((d) => shiftDays(d, 7))}
           aria-label="Next week"
         >
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
         </Button>
 
         {!isCurrentWeek && (
@@ -406,11 +423,12 @@ export default function TimetableView() {
             variant="ghost"
             size="sm"
             onClick={() => setWeekStart(getWeekStart(today))}
+            aria-label="Go to current week"
           >
             Today
           </Button>
         )}
-      </div>
+      </nav>
 
       {/* ── Timetable grid ── */}
       <div
@@ -420,6 +438,9 @@ export default function TimetableView() {
         )}
       >
         <table className="border-collapse w-full table-fixed">
+          <caption className="sr-only">
+            {`Timetable for the week of ${weekLabel}`}
+          </caption>
           <colgroup>
             <col style={{ width: "4rem" }} />
             {days.map((_, i) => (
@@ -430,18 +451,26 @@ export default function TimetableView() {
           {/* Day headers */}
           <thead className="sticky top-0 z-20 bg-background">
             <tr>
-              <th className="sticky left-0 z-30 bg-background border-b border-r" />
+              <th
+                scope="col"
+                aria-label="Time"
+                className="sticky left-0 z-30 bg-background border-b border-r"
+              />
               {days.map((day, i) => {
                 const isToday = isSameDay(day, today);
+                const fullDayLabel = fullDayStr(day);
                 return (
                   <th
                     key={i}
+                    scope="col"
+                    aria-label={isToday ? `${fullDayLabel}, today` : fullDayLabel}
                     className={cn(
                       "border-b border-r last:border-r-0 p-2 text-center font-normal select-none",
                       isToday && "bg-primary/5",
                     )}
                   >
                     <p
+                      aria-hidden="true"
                       className={cn(
                         "text-[11px] uppercase tracking-wider text-muted-foreground",
                         isToday && "text-primary font-semibold",
@@ -450,6 +479,7 @@ export default function TimetableView() {
                       {day.toLocaleDateString("en-GB", { weekday: "short" })}
                     </p>
                     <div
+                      aria-hidden="true"
                       className={cn(
                         "mt-1 mx-auto h-9 w-9 flex items-center justify-center rounded-full text-[18px] font-semibold",
                         isToday
@@ -469,19 +499,29 @@ export default function TimetableView() {
           <tbody>
             {HOUR_SLOTS.map((hour) => (
               <tr key={hour}>
-                <td className="sticky left-0 z-10 bg-background border-b border-r px-2 pt-1 text-[11px] font-mono text-muted-foreground text-right align-top select-none">
-                  {fmtHour(hour)}
-                </td>
+                <th
+                  scope="row"
+                  aria-label={`${fmtHour(hour)} to ${fmtHour(hour + 1)}`}
+                  className="sticky left-0 z-10 bg-background border-b border-r px-2 pt-1 text-[11px] font-mono text-muted-foreground text-right align-top select-none font-normal"
+                >
+                  <span aria-hidden="true">{fmtHour(hour)}</span>
+                </th>
                 {days.map((day, i) => {
                   const key = cellKey(day, hour);
+                  const taskText = tasks[key]?.text;
+                  const dayName = DAY_NAMES[day.getDay()];
+                  const cellAriaLabel = taskText
+                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}: ${taskText}`
+                    : `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, empty`;
                   return (
                     <TimetableCell
                       key={i}
-                      savedText={tasks[key]?.text ?? ""}
+                      savedText={taskText ?? ""}
                       savedColor={tasks[key]?.color ?? ""}
                       isToday={isSameDay(day, today)}
                       isEditing={editingKey === key}
                       isDark={isDark}
+                      cellAriaLabel={cellAriaLabel}
                       draft={draft}
                       draftColor={draftColor}
                       onActivate={() => startEdit(key)}
