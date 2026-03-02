@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TimetableView from "@/components/timetable/timetable-view";
 
@@ -448,6 +448,98 @@ describe("TimetableView", () => {
       });
       await waitFor(() =>
         expect(screen.getByText("Dark task")).toBeInTheDocument()
+      );
+    });
+  });
+
+  // ── Current time indicator ────────────────────────────────────────────────
+
+  describe("current time indicator", () => {
+    // 2026-03-02 is a Monday — within the grid range (10:00 slot)
+    const MONDAY_10_30 = new Date("2026-03-02T10:30:00");
+    const MONDAY_10_00 = new Date("2026-03-02T10:00:00");
+    const MONDAY_05_59 = new Date("2026-03-02T05:59:00");
+    const MONDAY_20_00 = new Date("2026-03-02T20:00:00");
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("renders the indicator when viewing the current week", async () => {
+      jest.setSystemTime(MONDAY_10_30);
+      await renderAndLoad();
+      expect(
+        screen.getByTestId("current-time-indicator")
+      ).toBeInTheDocument();
+    });
+
+    it("positions the indicator at 50% within the slot at :30 minutes", async () => {
+      jest.setSystemTime(MONDAY_10_30);
+      await renderAndLoad();
+      expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
+        "top: 50%"
+      );
+    });
+
+    it("positions the indicator at 0% at the exact start of an hour", async () => {
+      jest.setSystemTime(MONDAY_10_00);
+      await renderAndLoad();
+      expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
+        "top: 0%"
+      );
+    });
+
+    it("does not render before the grid range (before 06:00)", async () => {
+      jest.setSystemTime(MONDAY_05_59);
+      await renderAndLoad();
+      expect(
+        screen.queryByTestId("current-time-indicator")
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not render after the grid range (20:00 or later)", async () => {
+      jest.setSystemTime(MONDAY_20_00);
+      await renderAndLoad();
+      expect(
+        screen.queryByTestId("current-time-indicator")
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not render when viewing a different week", async () => {
+      jest.setSystemTime(MONDAY_10_30);
+      const user = userEvent.setup({
+        advanceTimers: jest.advanceTimersByTime,
+      });
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: async () => ({ entries: {} }),
+      });
+      await renderAndLoad();
+      await user.click(screen.getByRole("button", { name: "Next week" }));
+      expect(
+        screen.queryByTestId("current-time-indicator")
+      ).not.toBeInTheDocument();
+    });
+
+    it("updates position after one minute elapses", async () => {
+      // Start at 10:29 so that advancing 60 s lands the system clock at 10:30
+      jest.setSystemTime(new Date("2026-03-02T10:29:00"));
+      await renderAndLoad();
+      expect(screen.getByTestId("current-time-indicator")).toBeInTheDocument();
+
+      // Advancing fake timers also shifts Date.now() by the same amount,
+      // so the interval callback receives new Date() === 10:30:00 → top: 50%
+      act(() => {
+        jest.advanceTimersByTime(60_000);
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
+          "top: 50%"
+        )
       );
     });
   });
