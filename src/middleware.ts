@@ -25,8 +25,21 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session so it doesn't expire while the user is active
-  await supabase.auth.getUser();
+  // Refresh session and enforce auth-based routing
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { pathname } = request.nextUrl;
+  const isLoginPage = pathname === "/login";
+
+  if (!user && !isLoginPage) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  if (user && isLoginPage) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
 
   return supabaseResponse;
 }
