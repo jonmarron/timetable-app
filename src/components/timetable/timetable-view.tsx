@@ -204,7 +204,7 @@ function TimetableCell({
               onClick={(e) => { e.stopPropagation(); onColorChange(""); }}
               aria-label="No colour"
               className={cn(
-                "h-4 w-4 rounded-full border-2 bg-background flex items-center justify-center",
+                "h-4 w-4 rounded-full border-2 bg-background flex items-center justify-center cursor-pointer",
                 draftColor === ""
                   ? "border-foreground"
                   : "border-muted-foreground/40",
@@ -221,7 +221,7 @@ function TimetableCell({
                 aria-label={id}
                 style={{ backgroundColor: swatch }}
                 className={cn(
-                  "h-4 w-4 rounded-full border-2 transition-transform",
+                  "h-4 w-4 rounded-full border-2 transition-transform cursor-pointer",
                   draftColor === id
                     ? "border-foreground scale-110"
                     : "border-transparent hover:scale-110",
@@ -244,7 +244,7 @@ function TimetableCell({
 
           <button
             onClick={(e) => { e.stopPropagation(); onDeleteRequest(); }}
-            className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+            className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
             aria-label="Delete entry"
           >
             <Trash2 className="h-3 w-3" />
