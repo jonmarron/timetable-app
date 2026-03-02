@@ -1,6 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 
+async function getAuthenticatedClient() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return { supabase, user };
+}
+
 // GET /api/timetable?weekStart=YYYY-MM-DD
 // Returns { entries: Record<string, { text: string; color: string }> }
 export async function GET(request: NextRequest) {
@@ -9,11 +17,15 @@ export async function GET(request: NextRequest) {
   if (!weekStart) {
     return NextResponse.json(
       { error: "weekStart query param is required" },
-      { status: 400 },
+      { status: 400 }
     );
   }
 
-  const supabase = await createClient();
+  const { supabase, user } = await getAuthenticatedClient();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const { data, error } = await supabase
     .from("timetable_entries")
@@ -36,6 +48,12 @@ export async function GET(request: NextRequest) {
 // Body: { weekStart: string, cellKey: string, task: string, color: string }
 // Upserts a single entry
 export async function POST(request: NextRequest) {
+  const { supabase, user } = await getAuthenticatedClient();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const body = await request.json();
   const { weekStart, cellKey, task, color } = body as {
     weekStart?: string;
@@ -47,11 +65,9 @@ export async function POST(request: NextRequest) {
   if (!weekStart || !cellKey || !task?.trim()) {
     return NextResponse.json(
       { error: "weekStart, cellKey, and task are required" },
-      { status: 400 },
+      { status: 400 }
     );
   }
-
-  const supabase = await createClient();
 
   const { error } = await supabase.from("timetable_entries").upsert(
     {
@@ -60,7 +76,7 @@ export async function POST(request: NextRequest) {
       task: task.trim(),
       color: color ?? "",
     },
-    { onConflict: "week_start,cell_key" },
+    { onConflict: "week_start,cell_key" }
   );
 
   if (error) {
@@ -73,6 +89,12 @@ export async function POST(request: NextRequest) {
 // DELETE /api/timetable
 // Body: { weekStart: string, cellKey: string }
 export async function DELETE(request: NextRequest) {
+  const { supabase, user } = await getAuthenticatedClient();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const body = await request.json();
   const { weekStart, cellKey } = body as {
     weekStart?: string;
@@ -82,11 +104,9 @@ export async function DELETE(request: NextRequest) {
   if (!weekStart || !cellKey) {
     return NextResponse.json(
       { error: "weekStart and cellKey are required" },
-      { status: 400 },
+      { status: 400 }
     );
   }
-
-  const supabase = await createClient();
 
   const { error } = await supabase
     .from("timetable_entries")
