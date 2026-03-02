@@ -5,12 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev      # Start dev server (Next.js, port 3000)
-npm run build    # Production build
-npm run lint     # ESLint
+npm run dev        # Start dev server (Next.js, port 3000)
+npm run build      # Production build
+npm run lint       # ESLint
+npm run test       # Jest (run once)
+npm run test:watch # Jest (watch mode)
 ```
 
-No test suite is configured yet.
+Tests use **Jest** + **React Testing Library**. Config: `jest.config.js` (uses `next/jest` transformer). Setup file: `jest.setup.ts` (imports `@testing-library/jest-dom`). Sample test: `src/__tests__/lib/utils.test.ts`.
 
 ## Architecture
 
