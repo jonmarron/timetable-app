@@ -114,6 +114,8 @@ interface CellProps {
   cellAriaLabel: string;
   draft: string;
   draftColor: ColorId;
+  /** Percentage (0–100) from the top of this cell where the current-time line should appear. Omit when not the current hour. */
+  nowPct?: number;
   onActivate: () => void;
   onDraftChange: (v: string) => void;
   onColorChange: (c: ColorId) => void;
@@ -131,6 +133,7 @@ function TimetableCell({
   cellAriaLabel,
   draft,
   draftColor,
+  nowPct,
   onActivate,
   onDraftChange,
   onColorChange,
@@ -171,6 +174,19 @@ function TimetableCell({
         isEditing && "ring-2 ring-inset ring-ring",
       )}
     >
+      {nowPct !== undefined && (
+        <div
+          aria-hidden="true"
+          data-testid="current-time-indicator"
+          className="absolute inset-x-0 z-10 pointer-events-none"
+          style={{ top: `${nowPct}%` }}
+        >
+          <div className="relative h-px bg-red-500">
+            <div className="absolute -left-0.5 -top-[3px] h-2 w-2 rounded-full bg-red-500" />
+          </div>
+        </div>
+      )}
+
       {isEditing ? (
         <>
           <textarea
@@ -262,6 +278,12 @@ export default function TimetableView() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [weekStart, setWeekStart] = useState(() => getWeekStart(today));
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const [tasks, setTasks] = useState<Record<string, Entry>>({});
@@ -513,6 +535,8 @@ export default function TimetableView() {
                   const cellAriaLabel = taskText
                     ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}: ${taskText}`
                     : `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, empty`;
+                  const isCurrentCell = isSameDay(day, now) && hour === now.getHours();
+                  const nowPct = isCurrentCell ? (now.getMinutes() / 60) * 100 : undefined;
                   return (
                     <TimetableCell
                       key={i}
@@ -524,6 +548,7 @@ export default function TimetableView() {
                       cellAriaLabel={cellAriaLabel}
                       draft={draft}
                       draftColor={draftColor}
+                      nowPct={nowPct}
                       onActivate={() => startEdit(key)}
                       onDraftChange={setDraft}
                       onColorChange={setDraftColor}
