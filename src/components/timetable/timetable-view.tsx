@@ -1,14 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ChevronLeft, ChevronRight, CalendarDays, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -72,6 +81,71 @@ function getCellBg(colorId: ColorId, isDark: boolean): string | undefined {
 interface Entry {
   text: string;
   color: ColorId;
+  /** End hour (exclusive). Defaults to startHour + 1 if omitted. */
+  endHour?: number;
+  /** When true the task repeats across all weekdays of the week. */
+  repeatAllDays?: boolean;
+}
+
+// --- Coverage map ---
+
+interface CoverageInfo {
+  /** The cellKey of the canonical (first) entry that owns this cell. */
+  canonicalKey: string;
+  /** True only for the first hour slot of a task on each day it appears. */
+  isStart: boolean;
+}
+
+/** Parse "monday-09" → { dayName: "monday", hour: 9 } */
+function parseCellKey(key: string): { dayName: string; hour: number } {
+  const dashIdx = key.lastIndexOf("-");
+  return {
+    dayName: key.slice(0, dashIdx),
+    hour: parseInt(key.slice(dashIdx + 1), 10),
+  };
+}
+
+/**
+ * Build a map from every cell key that has visual content to the canonical
+ * entry that owns it. Non-repeating tasks take priority over repeating ones.
+ */
+function buildCoverage(
+  tasks: Record<string, Entry>,
+  days: Date[]
+): Record<string, CoverageInfo> {
+  const coverage: Record<string, CoverageInfo> = {};
+  const entries = Object.entries(tasks);
+
+  // Pass 1: non-repeating tasks (exact-match cells, highest priority)
+  for (const [key, entry] of entries) {
+    if (entry.repeatAllDays) continue;
+    const { dayName, hour: startHour } = parseCellKey(key);
+    const endHour = entry.endHour ?? startHour + 1;
+    for (let h = startHour; h < endHour; h++) {
+      const k = `${dayName}-${String(h).padStart(2, "0")}`;
+      coverage[k] = { canonicalKey: key, isStart: h === startHour };
+    }
+  }
+
+  // Pass 2: repeating tasks fill any cells not already claimed
+  for (const [key, entry] of entries) {
+    if (!entry.repeatAllDays) continue;
+    const { hour: startHour } = parseCellKey(key);
+    const endHour = entry.endHour ?? startHour + 1;
+    for (const day of days) {
+      const dn = day
+        .toLocaleDateString("en-GB", { weekday: "long" })
+        .toLowerCase();
+      for (let h = startHour; h < endHour; h++) {
+        const k = `${dn}-${String(h).padStart(2, "0")}`;
+        if (!coverage[k]) {
+          coverage[k] = { canonicalKey: key, isStart: h === startHour };
+        }
+      }
+    }
+  }
+
+  return coverage;
 }
 
 // --- Constants ---
@@ -109,18 +183,13 @@ interface CellProps {
   savedText: string;
   savedColor: ColorId;
   isToday: boolean;
-  isEditing: boolean;
   isDark: boolean;
   cellAriaLabel: string;
-  draft: string;
-  draftColor: ColorId;
   /** Percentage (0–100) from the top of this cell where the current-time line should appear. Omit when not the current hour. */
   nowPct?: number;
+  /** True when this cell is a non-first hour of a multi-hour or repeated task. */
+  isContinuation?: boolean;
   onActivate: () => void;
-  onDraftChange: (v: string) => void;
-  onColorChange: (c: ColorId) => void;
-  onCommit: () => void;
-  onCancel: () => void;
   onDeleteRequest: () => void;
 }
 
@@ -128,50 +197,25 @@ function TimetableCell({
   savedText,
   savedColor,
   isToday,
-  isEditing,
   isDark,
   cellAriaLabel,
-  draft,
-  draftColor,
   nowPct,
+  isContinuation,
   onActivate,
-  onDraftChange,
-  onColorChange,
-  onCommit,
-  onCancel,
   onDeleteRequest,
 }: CellProps) {
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  function autoResize(el: HTMLTextAreaElement) {
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }
-
-  useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-      autoResize(inputRef.current);
-    }
-  }, [isEditing]);
-
-  // The active colour (draft while editing, saved otherwise)
-  const activeBg = getCellBg(isEditing ? draftColor : savedColor, isDark);
+  const activeBg = getCellBg(savedColor, isDark);
 
   return (
     <td
-      onClick={!isEditing ? onActivate : undefined}
+      onClick={onActivate}
       aria-label={cellAriaLabel}
       style={activeBg ? { backgroundColor: activeBg } : undefined}
       className={cn(
-        "relative group border-b border-r last:border-r-0 h-14 p-1 align-top transition-colors",
-        !isEditing && "cursor-pointer",
-        // Default hover / today tint only when no colour is set
-        !activeBg && !isEditing && !isToday && "hover:bg-accent/60",
-        !activeBg && !isEditing && isToday && "bg-primary/5 hover:bg-primary/10",
-        !activeBg && isToday && isEditing && "bg-primary/5",
-        isEditing && "ring-2 ring-inset ring-ring",
+        "relative group border-b border-r last:border-r-0 h-14 p-1 align-top transition-colors cursor-pointer",
+        !activeBg && !isToday && !isContinuation && "hover:bg-accent/60",
+        !activeBg && !isToday && isContinuation && "bg-primary/5",
+        !activeBg && isToday && "bg-primary/5 hover:bg-primary/10",
       )}
     >
       {nowPct !== undefined && (
@@ -187,71 +231,11 @@ function TimetableCell({
         </div>
       )}
 
-      {isEditing ? (
-        <>
-          <textarea
-            ref={inputRef}
-            value={draft}
-            rows={1}
-            onChange={(e) => {
-              onDraftChange(e.target.value);
-              autoResize(e.target);
-            }}
-            onBlur={onCancel}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onCommit();
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                onCancel();
-              }
-            }}
-            placeholder="Add task…"
-            className="w-full bg-transparent outline-none text-sm leading-tight placeholder:text-muted-foreground/50 resize-none overflow-hidden"
-          />
-
-          {/* Colour swatches */}
-          <div className="flex items-center gap-1 mt-1.5">
-            {/* No-colour option */}
-            <button
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => { e.stopPropagation(); onColorChange(""); }}
-              aria-label="No colour"
-              className={cn(
-                "h-4 w-4 rounded-full border-2 bg-background flex items-center justify-center cursor-pointer",
-                draftColor === ""
-                  ? "border-foreground"
-                  : "border-muted-foreground/40",
-              )}
-            >
-              <X className="h-2.5 w-2.5 text-muted-foreground" />
-            </button>
-
-            {COLORS.map(({ id, swatch }) => (
-              <button
-                key={id}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => { e.stopPropagation(); onColorChange(id); }}
-                aria-label={id}
-                style={{ backgroundColor: swatch }}
-                className={cn(
-                  "h-4 w-4 rounded-full border-2 transition-transform cursor-pointer",
-                  draftColor === id
-                    ? "border-foreground scale-110"
-                    : "border-transparent hover:scale-110",
-                )}
-              />
-            ))}
-          </div>
-        </>
-      ) : savedText ? (
+      {savedText && (
         <>
           <p
             className={cn(
               "text-xs font-medium leading-snug break-words pr-6",
-              // Only show the default pill style when there's no background colour
               !savedColor && "px-1.5 py-1 rounded-md bg-primary/15 text-primary",
             )}
           >
@@ -266,7 +250,7 @@ function TimetableCell({
             <Trash2 className="h-3 w-3" />
           </button>
         </>
-      ) : null}
+      )}
     </td>
   );
 }
@@ -290,6 +274,9 @@ export default function TimetableView() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftColor, setDraftColor] = useState<ColorId>("");
+  const [draftStartHour, setDraftStartHour] = useState(6);
+  const [draftEndHour, setDraftEndHour] = useState(7);
+  const [draftRepeatAllDays, setDraftRepeatAllDays] = useState(false);
   const [loadedWeek, setLoadedWeek] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
@@ -321,48 +308,76 @@ export default function TimetableView() {
     }),
   ].join(" ");
 
+  // Build coverage map: maps every visually-occupied cellKey to the canonical entry
+  const coverage = useMemo(
+    () => buildCoverage(tasks, days),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tasks, weekStart]
+  );
+
   function startEdit(key: string) {
+    const { hour: startHour } = parseCellKey(key);
     setEditingKey(key);
     setDraft(tasks[key]?.text ?? "");
     setDraftColor(tasks[key]?.color ?? "");
+    setDraftStartHour(startHour);
+    setDraftEndHour(tasks[key]?.endHour ?? startHour + 1);
+    setDraftRepeatAllDays(tasks[key]?.repeatAllDays ?? false);
   }
 
   function commit() {
     if (!editingKey) return;
     const trimmed = draft.trim();
-    const key = editingKey;
+    const oldKey = editingKey;
+    const { dayName } = parseCellKey(oldKey);
+    const newKey = `${dayName}-${String(draftStartHour).padStart(2, "0")}`;
     const weekStr = toDateStr(weekStart);
 
     // Optimistic update
     setTasks((prev) => {
-      if (!trimmed) {
-        const next = { ...prev };
-        delete next[key];
-        return next;
+      const next = { ...prev };
+      delete next[oldKey];
+      if (trimmed) {
+        next[newKey] = {
+          text: trimmed,
+          color: draftColor,
+          endHour: draftEndHour,
+          repeatAllDays: draftRepeatAllDays,
+        };
       }
-      return { ...prev, [key]: { text: trimmed, color: draftColor } };
+      return next;
     });
     setEditingKey(null);
     setDraft("");
     setDraftColor("");
+    setDraftRepeatAllDays(false);
 
-    // Persist
     if (trimmed) {
+      // If the start hour changed, remove the old canonical entry first
+      if (oldKey !== newKey && tasks[oldKey]) {
+        fetch("/api/timetable", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ weekStart: weekStr, cellKey: oldKey }),
+        }).catch(console.error);
+      }
       fetch("/api/timetable", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           weekStart: weekStr,
-          cellKey: key,
+          cellKey: newKey,
           task: trimmed,
           color: draftColor,
+          endHour: draftEndHour,
+          repeatAllDays: draftRepeatAllDays,
         }),
       }).catch(console.error);
-    } else if (tasks[key]) {
+    } else if (tasks[oldKey]) {
       fetch("/api/timetable", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ weekStart: weekStr, cellKey: key }),
+        body: JSON.stringify({ weekStart: weekStr, cellKey: oldKey }),
       }).catch(console.error);
     }
   }
@@ -371,6 +386,7 @@ export default function TimetableView() {
     setEditingKey(null);
     setDraft("");
     setDraftColor("");
+    setDraftRepeatAllDays(false);
   }
 
   function confirmDelete() {
@@ -391,6 +407,12 @@ export default function TimetableView() {
       body: JSON.stringify({ weekStart: weekStr, cellKey: key }),
     }).catch(console.error);
   }
+
+  // End-hour options depend on the currently selected start hour
+  const endHourOptions = Array.from(
+    { length: 20 - draftStartHour },
+    (_, i) => draftStartHour + 1 + i
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -530,31 +552,39 @@ export default function TimetableView() {
                 </th>
                 {days.map((day, i) => {
                   const key = cellKey(day, hour);
-                  const taskText = tasks[key]?.text;
+                  const coverageInfo = coverage[key];
+                  const canonicalKey = coverageInfo?.canonicalKey ?? key;
+                  const canonicalEntry = coverageInfo
+                    ? tasks[coverageInfo.canonicalKey]
+                    : undefined;
+                  const isContinuation = !!coverageInfo && !coverageInfo.isStart;
+                  const displayText = coverageInfo?.isStart
+                    ? (canonicalEntry?.text ?? "")
+                    : "";
+                  const displayColor = canonicalEntry?.color ?? "";
+
                   const dayName = DAY_NAMES[day.getDay()];
-                  const cellAriaLabel = taskText
-                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}: ${taskText}`
+                  const cellAriaLabel = isContinuation
+                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, continuation of ${canonicalEntry?.text ?? "task"}`
+                    : displayText
+                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}: ${displayText}`
                     : `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, empty`;
+
                   const isCurrentCell = isSameDay(day, now) && hour === now.getHours();
                   const nowPct = isCurrentCell ? (now.getMinutes() / 60) * 100 : undefined;
+
                   return (
                     <TimetableCell
                       key={i}
-                      savedText={taskText ?? ""}
-                      savedColor={tasks[key]?.color ?? ""}
+                      savedText={displayText}
+                      savedColor={displayColor}
                       isToday={isSameDay(day, today)}
-                      isEditing={editingKey === key}
                       isDark={isDark}
                       cellAriaLabel={cellAriaLabel}
-                      draft={draft}
-                      draftColor={draftColor}
                       nowPct={nowPct}
-                      onActivate={() => startEdit(key)}
-                      onDraftChange={setDraft}
-                      onColorChange={setDraftColor}
-                      onCommit={commit}
-                      onCancel={cancel}
-                      onDeleteRequest={() => setDeletingKey(key)}
+                      isContinuation={isContinuation}
+                      onActivate={() => startEdit(canonicalKey)}
+                      onDeleteRequest={() => setDeletingKey(canonicalKey)}
                     />
                   );
                 })}
@@ -563,6 +593,138 @@ export default function TimetableView() {
           </tbody>
         </table>
       </div>
+
+      {/* ── Add / Edit task dialog ── */}
+      <Dialog
+        open={!!editingKey}
+        onOpenChange={(open) => { if (!open) cancel(); }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {editingKey && tasks[editingKey] ? "Edit task" : "Add task"}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Enter a task title, set the time range and repeat option, then save or cancel.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-1">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="task-title">Title</Label>
+              <Input
+                id="task-title"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commit(); }
+                }}
+                placeholder="Add task…"
+              />
+            </div>
+
+            {/* Time range */}
+            <div className="flex flex-col gap-1.5">
+              <Label>Time</Label>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={String(draftStartHour)}
+                  onValueChange={(v) => {
+                    const newStart = Number(v);
+                    setDraftStartHour(newStart);
+                    setDraftEndHour((prev) => Math.max(prev, newStart + 1));
+                  }}
+                >
+                  <SelectTrigger className="flex-1" aria-label="Start time">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {HOUR_SLOTS.map((h) => (
+                      <SelectItem key={h} value={String(h)}>
+                        {fmtHour(h)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <span className="text-muted-foreground text-sm">to</span>
+
+                <Select
+                  value={String(draftEndHour)}
+                  onValueChange={(v) => setDraftEndHour(Number(v))}
+                >
+                  <SelectTrigger className="flex-1" aria-label="End time">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {endHourOptions.map((h) => (
+                      <SelectItem key={h} value={String(h)}>
+                        {fmtHour(h)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Repeat every weekday */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="repeat-all-days"
+                checked={draftRepeatAllDays}
+                onChange={(e) => setDraftRepeatAllDays(e.target.checked)}
+                className="h-4 w-4 cursor-pointer accent-primary"
+              />
+              <Label htmlFor="repeat-all-days" className="cursor-pointer font-normal">
+                Repeat every weekday
+              </Label>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Colour</Label>
+              <div className="flex items-center gap-2">
+                {/* No-colour option */}
+                <button
+                  onClick={() => setDraftColor("")}
+                  aria-label="No colour"
+                  className={cn(
+                    "h-6 w-6 rounded-full border-2 bg-background flex items-center justify-center cursor-pointer transition-transform",
+                    draftColor === "" ? "border-foreground scale-110" : "border-muted-foreground/40 hover:scale-110",
+                  )}
+                >
+                  <X className="h-3 w-3 text-muted-foreground" />
+                </button>
+
+                {COLORS.map(({ id, swatch }) => (
+                  <button
+                    key={id}
+                    onClick={() => setDraftColor(id)}
+                    aria-label={id}
+                    style={{ backgroundColor: swatch }}
+                    className={cn(
+                      "h-6 w-6 rounded-full border-2 transition-transform cursor-pointer",
+                      draftColor === id
+                        ? "border-foreground scale-110"
+                        : "border-transparent hover:scale-110",
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button onClick={commit}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Delete confirmation dialog ── */}
       <Dialog
