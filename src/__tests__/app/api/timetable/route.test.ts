@@ -111,8 +111,8 @@ describe("GET /api/timetable", () => {
   it("returns entries keyed by cell_key for an authenticated user", async () => {
     mockClient({
       selectData: [
-        { cell_key: "monday-09", task: "Stand-up", color: "blue" },
-        { cell_key: "tuesday-10", task: "Review", color: "" },
+        { cell_key: "monday-09", task: "Stand-up", color: "blue", end_hour: null, repeat_all_days: false },
+        { cell_key: "tuesday-10", task: "Review", color: "", end_hour: null, repeat_all_days: false },
       ],
     });
     const req = makeRequest(
@@ -122,8 +122,69 @@ describe("GET /api/timetable", () => {
     const res = await GET(req);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.entries["monday-09"]).toEqual({ text: "Stand-up", color: "blue" });
-    expect(body.entries["tuesday-10"]).toEqual({ text: "Review", color: "" });
+    expect(body.entries["monday-09"]).toMatchObject({ text: "Stand-up", color: "blue" });
+    expect(body.entries["tuesday-10"]).toMatchObject({ text: "Review", color: "" });
+  });
+
+  it("includes endHour in the response when end_hour is set", async () => {
+    mockClient({
+      selectData: [
+        { cell_key: "monday-09", task: "Deep work", color: "", end_hour: 11, repeat_all_days: false },
+      ],
+    });
+    const req = makeRequest(
+      "GET",
+      "http://localhost/api/timetable?weekStart=2025-03-03"
+    );
+    const res = await GET(req);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.entries["monday-09"].endHour).toBe(11);
+  });
+
+  it("omits endHour when end_hour is null", async () => {
+    mockClient({
+      selectData: [
+        { cell_key: "monday-09", task: "Stand-up", color: "", end_hour: null, repeat_all_days: false },
+      ],
+    });
+    const req = makeRequest(
+      "GET",
+      "http://localhost/api/timetable?weekStart=2025-03-03"
+    );
+    const res = await GET(req);
+    const body = await res.json();
+    expect(body.entries["monday-09"]).not.toHaveProperty("endHour");
+  });
+
+  it("includes repeatAllDays:true when repeat_all_days is true", async () => {
+    mockClient({
+      selectData: [
+        { cell_key: "monday-09", task: "Standup", color: "", end_hour: null, repeat_all_days: true },
+      ],
+    });
+    const req = makeRequest(
+      "GET",
+      "http://localhost/api/timetable?weekStart=2025-03-03"
+    );
+    const res = await GET(req);
+    const body = await res.json();
+    expect(body.entries["monday-09"].repeatAllDays).toBe(true);
+  });
+
+  it("omits repeatAllDays when repeat_all_days is false", async () => {
+    mockClient({
+      selectData: [
+        { cell_key: "monday-09", task: "Stand-up", color: "", end_hour: null, repeat_all_days: false },
+      ],
+    });
+    const req = makeRequest(
+      "GET",
+      "http://localhost/api/timetable?weekStart=2025-03-03"
+    );
+    const res = await GET(req);
+    const body = await res.json();
+    expect(body.entries["monday-09"]).not.toHaveProperty("repeatAllDays");
   });
 
   it("returns 500 when the database query fails", async () => {
@@ -184,6 +245,48 @@ describe("POST /api/timetable", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
+  });
+
+  it("accepts endHour and repeatAllDays in the request body", async () => {
+    const client = mockClient({});
+    const req = makeRequest("POST", "http://localhost/api/timetable", {
+      weekStart: "2025-03-03",
+      cellKey: "monday-09",
+      task: "Focus block",
+      color: "",
+      endHour: 11,
+      repeatAllDays: true,
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    // Verify upsert was called with the new fields
+    const upsertCall = client.from("timetable_entries").upsert;
+    expect(upsertCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        end_hour: 11,
+        repeat_all_days: true,
+      }),
+      expect.anything()
+    );
+  });
+
+  it("defaults end_hour to null and repeat_all_days to false when not provided", async () => {
+    const client = mockClient({});
+    const req = makeRequest("POST", "http://localhost/api/timetable", {
+      weekStart: "2025-03-03",
+      cellKey: "monday-09",
+      task: "Stand-up",
+      color: "",
+    });
+    await POST(req);
+    const upsertCall = client.from("timetable_entries").upsert;
+    expect(upsertCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        end_hour: null,
+        repeat_all_days: false,
+      }),
+      expect.anything()
+    );
   });
 
   it("returns 500 when the upsert fails", async () => {

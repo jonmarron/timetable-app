@@ -14,7 +14,7 @@ jest.mock("next-themes", () => ({
 
 /** Wait until the initial fetch resolves and loading state clears. */
 async function renderAndLoad(
-  entries: Record<string, { text: string; color: string }> = {}
+  entries: Record<string, { text: string; color: string; endHour?: number; repeatAllDays?: boolean }> = {}
 ) {
   (global.fetch as jest.Mock).mockResolvedValueOnce({
     json: async () => ({ entries }),
@@ -223,6 +223,37 @@ describe("TimetableView", () => {
       expect(screen.getByPlaceholderText("Add task…")).toBeInTheDocument();
     });
 
+    it("shows time selects and repeat checkbox while editing", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+      );
+      expect(screen.getByRole("combobox", { name: "Start time" })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "End time" })).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: /Repeat every weekday/ })).toBeInTheDocument();
+    });
+
+    it("start time defaults to the clicked cell hour", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00, empty/ })
+      );
+      const startTrigger = screen.getByRole("combobox", { name: "Start time" });
+      expect(startTrigger).toHaveTextContent("09:00");
+    });
+
+    it("end time defaults to start time + 1 hour", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00, empty/ })
+      );
+      const endTrigger = screen.getByRole("combobox", { name: "End time" });
+      expect(endTrigger).toHaveTextContent("10:00");
+    });
+
     it("shows colour swatches while editing", async () => {
       const user = userEvent.setup();
       await renderAndLoad();
@@ -304,6 +335,29 @@ describe("TimetableView", () => {
       });
     });
 
+    it("POST body includes endHour and repeatAllDays", async () => {
+      const user = userEvent.setup();
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: async () => ({ entries: {} }),
+      });
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+      );
+      await user.type(screen.getByRole("textbox"), "Morning block");
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => {
+        const calls = (global.fetch as jest.Mock).mock.calls;
+        const postCall = calls.find(
+          ([, opts]: [string, RequestInit]) => opts?.method === "POST"
+        );
+        expect(postCall).toBeDefined();
+        expect(postCall[1].body).toContain('"endHour"');
+        expect(postCall[1].body).toContain('"repeatAllDays"');
+      });
+    });
+
     it("selecting a colour is included in the POST body", async () => {
       const user = userEvent.setup();
       (global.fetch as jest.Mock).mockResolvedValue({
@@ -359,6 +413,184 @@ describe("TimetableView", () => {
         screen.getByRole("cell", { name: /Monday, 09:00 to 10:00/ })
       );
       expect(screen.getByRole("textbox")).toHaveValue("Yoga");
+    });
+  });
+
+  // ── Multi-hour spanning ──────────────────────────────────────────────────
+
+  describe("multi-hour task spanning", () => {
+    it("shows task text only in the first hour slot", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+      });
+      await waitFor(() => expect(screen.getByText("Deep work")).toBeInTheDocument());
+      // Text appears exactly once
+      expect(screen.getAllByText("Deep work")).toHaveLength(1);
+    });
+
+    it("labels the first slot with the task text", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+      });
+      await waitFor(() => screen.getByText("Deep work"));
+      expect(
+        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00: Deep work/ })
+      ).toBeInTheDocument();
+    });
+
+    it("labels subsequent slots as continuations", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+      });
+      await waitFor(() => screen.getByText("Deep work"));
+      expect(
+        screen.getByRole("cell", { name: /Monday, 10:00 to 11:00, continuation of Deep work/ })
+      ).toBeInTheDocument();
+    });
+
+    it("does not show a delete button on continuation cells", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+      });
+      await waitFor(() => screen.getByText("Deep work"));
+      // Only one delete button (on the start cell), not on the continuation
+      expect(screen.getAllByRole("button", { name: "Delete entry" })).toHaveLength(1);
+    });
+
+    it("clicking a continuation cell opens the edit dialog for the canonical task", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+      });
+      await waitFor(() => screen.getByText("Deep work"));
+      const continuationCell = screen.getByRole("cell", {
+        name: /Monday, 10:00 to 11:00, continuation of Deep work/,
+      });
+      await user.click(continuationCell);
+      expect(screen.getByRole("textbox")).toHaveValue("Deep work");
+    });
+
+    it("start time select is pre-filled when editing a multi-hour task", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad({
+        "monday-09": { text: "Deep work", color: "", endHour: 11 },
+      });
+      await waitFor(() => screen.getByText("Deep work"));
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00: Deep work/ })
+      );
+      expect(
+        screen.getByRole("combobox", { name: "Start time" })
+      ).toHaveTextContent("09:00");
+      expect(
+        screen.getByRole("combobox", { name: "End time" })
+      ).toHaveTextContent("11:00");
+    });
+  });
+
+  // ── Repeat every weekday ─────────────────────────────────────────────────
+
+  describe("repeat every weekday", () => {
+    it("shows a repeating task in all 5 weekday columns", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Daily standup", color: "", repeatAllDays: true },
+      });
+      await waitFor(() =>
+        expect(screen.getAllByText("Daily standup")).toHaveLength(5)
+      );
+    });
+
+    it("each weekday shows the task text in the correct hour row", async () => {
+      await renderAndLoad({
+        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+      });
+      await waitFor(() => screen.getAllByText("Standup"));
+      // Monday, Tuesday, Wednesday, Thursday, Friday — all at 09:00-10:00
+      for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) {
+        expect(
+          screen.getByRole("cell", { name: new RegExp(`${day}, 09:00 to 10:00: Standup`) })
+        ).toBeInTheDocument();
+      }
+    });
+
+    it("clicking any repeated cell opens the edit dialog with repeatAllDays checked", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad({
+        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+      });
+      await waitFor(() => screen.getAllByText("Standup"));
+      await user.click(
+        screen.getByRole("cell", { name: /Wednesday, 09:00 to 10:00: Standup/ })
+      );
+      const checkbox = screen.getByRole("checkbox", { name: /Repeat every weekday/ });
+      expect(checkbox).toBeChecked();
+      expect(screen.getByRole("textbox")).toHaveValue("Standup");
+    });
+
+    it("delete on a repeated task deletes the canonical entry", async () => {
+      const user = userEvent.setup();
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: async () => ({ entries: {} }),
+      });
+      await renderAndLoad({
+        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+      });
+      await waitFor(() => screen.getAllByText("Standup"));
+
+      // Click delete on Monday (first visible delete button)
+      const deleteButtons = screen.getAllByRole("button", { name: "Delete entry" });
+      await user.click(deleteButtons[0]);
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+
+      await waitFor(() =>
+        expect(screen.queryByText("Standup")).not.toBeInTheDocument()
+      );
+
+      // The DELETE request should reference the canonical key
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const deleteCall = calls.find(
+        ([, opts]: [string, RequestInit]) => opts?.method === "DELETE"
+      );
+      expect(deleteCall).toBeDefined();
+      expect(deleteCall[1].body).toContain("monday-09");
+    });
+
+    it("multi-hour repeated task shows continuations on each weekday", async () => {
+      await renderAndLoad({
+        "monday-09": {
+          text: "Focus block",
+          color: "green",
+          endHour: 11,
+          repeatAllDays: true,
+        },
+      });
+      await waitFor(() =>
+        expect(screen.getAllByText("Focus block")).toHaveLength(5)
+      );
+      // There should be 5 continuation cells (10:00-11:00 for each day)
+      for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) {
+        expect(
+          screen.getByRole("cell", {
+            name: new RegExp(`${day}, 10:00 to 11:00, continuation of Focus block`),
+          })
+        ).toBeInTheDocument();
+      }
+    });
+
+    it("non-repeating task at the same hour takes precedence over a repeating one", async () => {
+      await renderAndLoad({
+        // Repeating task owned by Monday
+        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+        // Specific task on Wednesday at the same hour
+        "wednesday-09": { text: "1:1 meeting", color: "blue" },
+      });
+      await waitFor(() => screen.getByText("1:1 meeting"));
+      // Wednesday should show the specific task, not the repeated one
+      expect(
+        screen.getByRole("cell", { name: /Wednesday, 09:00 to 10:00: 1:1 meeting/ })
+      ).toBeInTheDocument();
+      // Standup should appear only on the 4 remaining days
+      expect(screen.getAllByText("Standup")).toHaveLength(4);
     });
   });
 
