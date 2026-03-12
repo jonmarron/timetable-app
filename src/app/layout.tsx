@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Timetable",
-  description: "Weekly timetable planner",
+  title: "Weekly Planner",
+  description: "Your personal weekly planner",
 };
 
 export default function RootLayout({

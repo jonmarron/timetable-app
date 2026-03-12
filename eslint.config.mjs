@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // CommonJS config files
+    "jest.config.js",
+    // Generated coverage reports
+    "coverage/**",
   ]),
 ]);
 

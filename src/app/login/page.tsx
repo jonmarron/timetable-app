@@ -27,7 +27,7 @@ export default function LoginPage() {
 
       <div className="w-full max-w-sm flex flex-col gap-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Timetable</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Weekly Planner</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {isSignIn ? "Sign in to your account" : "Create a new account"}
           </p>
@@ -38,6 +38,20 @@ export default function LoginPage() {
             <p role="alert" className="text-sm text-destructive">
               {error}
             </p>
+          )}
+
+          {!isSignIn && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="name">Name</Label>
+              <Input
+                id="name"
+                name="name"
+                type="text"
+                autoComplete="name"
+                placeholder="Your first name"
+                disabled={isPending}
+              />
+            </div>
           )}
 
           <div className="flex flex-col gap-1.5">

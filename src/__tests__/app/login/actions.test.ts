@@ -1,4 +1,4 @@
-import { signIn, signUp, signOut } from "@/app/login/actions";
+import { signIn, signUp, signOut, updateUserName } from "@/app/login/actions";
 import { createClient } from "@/lib/supabase/server";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ function mockSupabase(
       signInWithPassword: jest.fn().mockResolvedValue({ error: null }),
       signUp: jest.fn().mockResolvedValue({ error: null }),
       signOut: jest.fn().mockResolvedValue({ error: null }),
+      updateUser: jest.fn().mockResolvedValue({ error: null }),
       ...authOverrides,
     },
   };
@@ -149,6 +150,38 @@ describe("signUp", () => {
     expect(typeof result === "string").toBe(false);
   });
 
+  it("passes full_name in user_metadata when name is provided", async () => {
+    const spy = jest.fn().mockResolvedValue({ error: null });
+    mockSupabase({ signUp: spy });
+
+    await signUp(
+      null,
+      makeFormData({ email: "a@b.com", password: "pass123", name: "Jon" })
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      email: "a@b.com",
+      password: "pass123",
+      options: { data: { full_name: "Jon" } },
+    });
+  });
+
+  it("passes null for full_name when name is not provided", async () => {
+    const spy = jest.fn().mockResolvedValue({ error: null });
+    mockSupabase({ signUp: spy });
+
+    await signUp(
+      null,
+      makeFormData({ email: "a@b.com", password: "pass123" })
+    );
+
+    expect(spy).toHaveBeenCalledWith({
+      email: "a@b.com",
+      password: "pass123",
+      options: { data: { full_name: null } },
+    });
+  });
+
   it("returns the Supabase error message on failed sign-up", async () => {
     mockSupabase({
       signUp: jest
@@ -169,6 +202,47 @@ describe("signUp", () => {
       makeFormData({ email: "new@user.com", password: "pass123" })
     );
     expect(redirect).toHaveBeenCalledWith("/");
+  });
+});
+
+// ── updateUserName ──────────────────────────────────────────────────────────
+
+describe("updateUserName", () => {
+  it("returns an error when name is empty", async () => {
+    mockSupabase();
+    const result = await updateUserName(null, makeFormData({ name: "" }));
+    expect(result).toBe("Name cannot be empty.");
+  });
+
+  it("returns an error when name is only whitespace", async () => {
+    mockSupabase();
+    const result = await updateUserName(null, makeFormData({ name: "   " }));
+    expect(result).toBe("Name cannot be empty.");
+  });
+
+  it("calls updateUser with the trimmed name in user data", async () => {
+    const spy = jest.fn().mockResolvedValue({ error: null });
+    mockSupabase({ updateUser: spy });
+
+    await updateUserName(null, makeFormData({ name: "  Jon  " }));
+
+    expect(spy).toHaveBeenCalledWith({ data: { full_name: "Jon" } });
+  });
+
+  it("returns null on successful name update", async () => {
+    mockSupabase();
+    const result = await updateUserName(null, makeFormData({ name: "Jon" }));
+    expect(result).toBeNull();
+  });
+
+  it("returns the Supabase error message on failure", async () => {
+    mockSupabase({
+      updateUser: jest
+        .fn()
+        .mockResolvedValue({ error: { message: "JWT expired" } }),
+    });
+    const result = await updateUserName(null, makeFormData({ name: "Jon" }));
+    expect(result).toBe("JWT expired");
   });
 });
 
