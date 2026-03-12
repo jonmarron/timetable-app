@@ -1,4 +1,4 @@
-import { cn } from "@/lib/utils";
+import { cn, possessiveTitle } from "@/lib/utils";
 
 describe("cn()", () => {
   it("returns an empty string with no arguments", () => {
@@ -20,5 +20,27 @@ describe("cn()", () => {
 
   it("handles conditional classes via objects", () => {
     expect(cn({ "font-bold": true, italic: false })).toBe("font-bold");
+  });
+});
+
+describe("possessiveTitle()", () => {
+  it("appends 's to a regular name", () => {
+    expect(possessiveTitle("Jon")).toBe("Jon's Weekly Planner");
+  });
+
+  it("appends only an apostrophe when name ends in s", () => {
+    expect(possessiveTitle("James")).toBe("James' Weekly Planner");
+  });
+
+  it("handles uppercase S at end of name", () => {
+    expect(possessiveTitle("Thomas")).toBe("Thomas' Weekly Planner");
+  });
+
+  it("works with single-character names", () => {
+    expect(possessiveTitle("A")).toBe("A's Weekly Planner");
+  });
+
+  it("handles name ending in lowercase s", () => {
+    expect(possessiveTitle("Francis")).toBe("Francis' Weekly Planner");
   });
 });

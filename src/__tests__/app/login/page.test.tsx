@@ -21,7 +21,7 @@ describe("LoginPage", () => {
     it("shows the app title", () => {
       render(<LoginPage />);
       expect(
-        screen.getByRole("heading", { name: "Timetable" })
+        screen.getByRole("heading", { name: "Weekly Planner" })
       ).toBeInTheDocument();
     });
 
@@ -140,6 +140,41 @@ describe("LoginPage", () => {
       render(<LoginPage />);
       await user.type(screen.getByLabelText("Password"), "secret123");
       expect(screen.getByLabelText("Password")).toHaveValue("secret123");
+    });
+
+    it("does not show the name field in sign-in mode", () => {
+      render(<LoginPage />);
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    });
+
+    it("shows the name field in sign-up mode", async () => {
+      const user = userEvent.setup();
+      render(<LoginPage />);
+      await user.click(screen.getByRole("button", { name: "Sign up" }));
+      expect(screen.getByLabelText("Name")).toBeInTheDocument();
+    });
+
+    it("name field has type text in sign-up mode", async () => {
+      const user = userEvent.setup();
+      render(<LoginPage />);
+      await user.click(screen.getByRole("button", { name: "Sign up" }));
+      expect(screen.getByLabelText("Name")).toHaveAttribute("type", "text");
+    });
+
+    it("user can type into the name field in sign-up mode", async () => {
+      const user = userEvent.setup();
+      render(<LoginPage />);
+      await user.click(screen.getByRole("button", { name: "Sign up" }));
+      await user.type(screen.getByLabelText("Name"), "Jon");
+      expect(screen.getByLabelText("Name")).toHaveValue("Jon");
+    });
+
+    it("hides the name field when switching back to sign-in mode", async () => {
+      const user = userEvent.setup();
+      render(<LoginPage />);
+      await user.click(screen.getByRole("button", { name: "Sign up" }));
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
     });
   });
 });
