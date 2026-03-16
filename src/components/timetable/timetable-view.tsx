@@ -92,16 +92,25 @@ interface Entry {
 interface CoverageInfo {
   /** The cellKey of the canonical (first) entry that owns this cell. */
   canonicalKey: string;
-  /** True only for the first hour slot of a task on each day it appears. */
+  /** True only for the first slot of a task on each day it appears. */
   isStart: boolean;
 }
 
-/** Parse "monday-09" → { dayName: "monday", hour: 9 } */
-function parseCellKey(key: string): { dayName: string; hour: number } {
+/**
+ * Parse "monday-0900" → { dayName: "monday", hour: 9, minute: 0 }
+ * Also supports legacy format "monday-09" → { dayName: "monday", hour: 9, minute: 0 }
+ */
+function parseCellKey(key: string): { dayName: string; hour: number; minute: number } {
   const dashIdx = key.lastIndexOf("-");
+  const timeStr = key.slice(dashIdx + 1);
+  if (timeStr.length <= 2) {
+    // Legacy format: "09"
+    return { dayName: key.slice(0, dashIdx), hour: parseInt(timeStr, 10), minute: 0 };
+  }
   return {
     dayName: key.slice(0, dashIdx),
-    hour: parseInt(key.slice(dashIdx + 1), 10),
+    hour: parseInt(timeStr.slice(0, 2), 10),
+    minute: parseInt(timeStr.slice(2), 10),
   };
 }
 
@@ -119,27 +128,33 @@ function buildCoverage(
   // Pass 1: non-repeating tasks (exact-match cells, highest priority)
   for (const [key, entry] of entries) {
     if (entry.repeatAllDays) continue;
-    const { dayName, hour: startHour } = parseCellKey(key);
-    const endHour = entry.endHour ?? startHour + 1;
-    for (let h = startHour; h < endHour; h++) {
-      const k = `${dayName}-${String(h).padStart(2, "0")}`;
-      coverage[k] = { canonicalKey: key, isStart: h === startHour };
+    const { dayName, hour, minute } = parseCellKey(key);
+    const startTime = hour + minute / 60;
+    const endTime = entry.endHour ?? startTime + 0.5;
+    for (let t = startTime; t < endTime; t += 0.5) {
+      const h = Math.floor(t);
+      const m = Math.round((t % 1) * 60);
+      const k = `${dayName}-${String(h).padStart(2, "0")}${String(m).padStart(2, "0")}`;
+      coverage[k] = { canonicalKey: key, isStart: t === startTime };
     }
   }
 
   // Pass 2: repeating tasks fill any cells not already claimed
   for (const [key, entry] of entries) {
     if (!entry.repeatAllDays) continue;
-    const { hour: startHour } = parseCellKey(key);
-    const endHour = entry.endHour ?? startHour + 1;
+    const { hour, minute } = parseCellKey(key);
+    const startTime = hour + minute / 60;
+    const endTime = entry.endHour ?? startTime + 0.5;
     for (const day of days) {
       const dn = day
         .toLocaleDateString("en-GB", { weekday: "long" })
         .toLowerCase();
-      for (let h = startHour; h < endHour; h++) {
-        const k = `${dn}-${String(h).padStart(2, "0")}`;
+      for (let t = startTime; t < endTime; t += 0.5) {
+        const h = Math.floor(t);
+        const m = Math.round((t % 1) * 60);
+        const k = `${dn}-${String(h).padStart(2, "0")}${String(m).padStart(2, "0")}`;
         if (!coverage[k]) {
-          coverage[k] = { canonicalKey: key, isStart: h === startHour };
+          coverage[k] = { canonicalKey: key, isStart: t === startTime };
         }
       }
     }
@@ -150,7 +165,14 @@ function buildCoverage(
 
 // --- Constants ---
 
-const HOUR_SLOTS = Array.from({ length: 14 }, (_, i) => i + 6); // 6…19
+/** 28 half-hour slots: 06:00, 06:30, 07:00, … 19:00, 19:30 */
+const TIME_SLOTS = Array.from({ length: 28 }, (_, i) => {
+  const totalMinutes = 360 + i * 30; // start at 06:00 = 360 min
+  return { hour: Math.floor(totalMinutes / 60), minute: totalMinutes % 60 };
+});
+
+/** All 30-min increments valid as an end time (up to and including 20:00) */
+const END_TIME_SLOTS = [...TIME_SLOTS, { hour: 20, minute: 0 }];
 
 const DAY_NAMES = [
   "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
@@ -165,16 +187,16 @@ function fullDayStr(date: Date): string {
   return `${DAY_NAMES[date.getDay()]}, ${date.getDate()} ${MONTH_NAMES[date.getMonth()]}`;
 }
 
-function fmtHour(h: number) {
-  return `${String(h).padStart(2, "0")}:00`;
+function fmtTime(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-/** "monday-09", "friday-14", etc. */
-function cellKey(day: Date, hour: number): string {
+/** "monday-0900", "friday-1430", etc. */
+function cellKey(day: Date, hour: number, minute: number): string {
   const name = day
     .toLocaleDateString("en-GB", { weekday: "long" })
     .toLowerCase();
-  return `${name}-${String(hour).padStart(2, "0")}`;
+  return `${name}-${String(hour).padStart(2, "0")}${String(minute).padStart(2, "0")}`;
 }
 
 // --- Cell ---
@@ -187,8 +209,10 @@ interface CellProps {
   cellAriaLabel: string;
   /** Percentage (0–100) from the top of this cell where the current-time line should appear. Omit when not the current hour. */
   nowPct?: number;
-  /** True when this cell is a non-first hour of a multi-hour or repeated task. */
+  /** True when this cell is a non-first slot of a multi-slot or repeated task. */
   isContinuation?: boolean;
+  /** True for the :30 half-hour separator row — renders a dashed bottom border. */
+  isHalfHour?: boolean;
   onActivate: () => void;
   onDeleteRequest: () => void;
 }
@@ -201,6 +225,7 @@ function TimetableCell({
   cellAriaLabel,
   nowPct,
   isContinuation,
+  isHalfHour,
   onActivate,
   onDeleteRequest,
 }: CellProps) {
@@ -210,9 +235,13 @@ function TimetableCell({
     <td
       onClick={onActivate}
       aria-label={cellAriaLabel}
+      data-halfhour={isHalfHour ? "true" : undefined}
       style={activeBg ? { backgroundColor: activeBg } : undefined}
       className={cn(
-        "relative group border-b border-r last:border-r-0 h-14 p-1 align-top transition-colors cursor-pointer",
+        "relative group border-r last:border-r-0 h-7 p-1 align-top transition-colors cursor-pointer",
+        isHalfHour
+          ? "border-b"
+          : "border-b [border-bottom-style:dashed] border-border/60",
         !activeBg && !isToday && !isContinuation && "hover:bg-accent/60",
         !activeBg && !isToday && isContinuation && "bg-primary/5",
         !activeBg && isToday && "bg-primary/5 hover:bg-primary/10",
@@ -274,8 +303,8 @@ export default function TimetableView() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftColor, setDraftColor] = useState<ColorId>("");
-  const [draftStartHour, setDraftStartHour] = useState(6);
-  const [draftEndHour, setDraftEndHour] = useState(7);
+  const [draftStartHour, setDraftStartHour] = useState(6); // float: 9.5 = 09:30
+  const [draftEndHour, setDraftEndHour] = useState(6.5); // float: 9.5 = 09:30
   const [draftRepeatAllDays, setDraftRepeatAllDays] = useState(false);
   const [loadedWeek, setLoadedWeek] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
@@ -316,12 +345,13 @@ export default function TimetableView() {
   );
 
   function startEdit(key: string) {
-    const { hour: startHour } = parseCellKey(key);
+    const { hour, minute } = parseCellKey(key);
+    const startTime = hour + minute / 60;
     setEditingKey(key);
     setDraft(tasks[key]?.text ?? "");
     setDraftColor(tasks[key]?.color ?? "");
-    setDraftStartHour(startHour);
-    setDraftEndHour(tasks[key]?.endHour ?? startHour + 1);
+    setDraftStartHour(startTime);
+    setDraftEndHour(tasks[key]?.endHour ?? startTime + 0.5);
     setDraftRepeatAllDays(tasks[key]?.repeatAllDays ?? false);
   }
 
@@ -330,7 +360,9 @@ export default function TimetableView() {
     const trimmed = draft.trim();
     const oldKey = editingKey;
     const { dayName } = parseCellKey(oldKey);
-    const newKey = `${dayName}-${String(draftStartHour).padStart(2, "0")}`;
+    const newHour = Math.floor(draftStartHour);
+    const newMinute = Math.round((draftStartHour % 1) * 60);
+    const newKey = `${dayName}-${String(newHour).padStart(2, "0")}${String(newMinute).padStart(2, "0")}`;
     const weekStr = toDateStr(weekStart);
 
     // Optimistic update
@@ -408,10 +440,9 @@ export default function TimetableView() {
     }).catch(console.error);
   }
 
-  // End-hour options depend on the currently selected start hour
-  const endHourOptions = Array.from(
-    { length: 20 - draftStartHour },
-    (_, i) => draftStartHour + 1 + i
+  // End-time options: all slots strictly after the selected start time, up to 20:00
+  const endTimeOptions = END_TIME_SLOTS.filter(
+    ({ hour, minute }) => hour + minute / 60 > draftStartHour
   );
 
   return (
@@ -539,57 +570,81 @@ export default function TimetableView() {
             </tr>
           </thead>
 
-          {/* Hour rows */}
+          {/* Half-hour rows */}
           <tbody>
-            {HOUR_SLOTS.map((hour) => (
-              <tr key={hour}>
-                <th
-                  scope="row"
-                  aria-label={`${fmtHour(hour)} to ${fmtHour(hour + 1)}`}
-                  className="sticky left-0 z-10 bg-background border-b border-r px-2 pt-1 text-[11px] font-mono text-muted-foreground text-right align-top select-none font-normal"
-                >
-                  <span aria-hidden="true">{fmtHour(hour)}</span>
-                </th>
-                {days.map((day, i) => {
-                  const key = cellKey(day, hour);
-                  const coverageInfo = coverage[key];
-                  const canonicalKey = coverageInfo?.canonicalKey ?? key;
-                  const canonicalEntry = coverageInfo
-                    ? tasks[coverageInfo.canonicalKey]
-                    : undefined;
-                  const isContinuation = !!coverageInfo && !coverageInfo.isStart;
-                  const displayText = coverageInfo?.isStart
-                    ? (canonicalEntry?.text ?? "")
-                    : "";
-                  const displayColor = canonicalEntry?.color ?? "";
+            {TIME_SLOTS.map(({ hour, minute }) => {
+              const isHalfHour = minute === 30;
+              const nextTotalMin = hour * 60 + minute + 30;
+              const nextHour = Math.floor(nextTotalMin / 60);
+              const nextMinute = nextTotalMin % 60;
+              return (
+                <tr key={`${hour}-${minute}`}>
+                  <th
+                    scope="row"
+                    aria-label={`${fmtTime(hour, minute)} to ${fmtTime(nextHour, nextMinute)}`}
+                    className={cn(
+                      "sticky left-0 z-10 bg-background border-r px-2 align-top select-none font-normal",
+                      isHalfHour
+                        ? "border-b pt-0 text-[9px] font-mono text-muted-foreground/50 text-right"
+                        : "border-b [border-bottom-style:dashed] border-border/60 pt-1 text-[11px] font-mono text-muted-foreground text-right",
+                    )}
+                  >
+                    {/* Only show label on the :00 rows */}
+                    {!isHalfHour && (
+                      <span aria-hidden="true">{fmtTime(hour, minute)}</span>
+                    )}
+                  </th>
+                  {days.map((day, i) => {
+                    const key = cellKey(day, hour, minute);
+                    const coverageInfo = coverage[key];
+                    const canonicalKey = coverageInfo?.canonicalKey ?? key;
+                    const canonicalEntry = coverageInfo
+                      ? tasks[coverageInfo.canonicalKey]
+                      : undefined;
+                    const isContinuation = !!coverageInfo && !coverageInfo.isStart;
+                    const displayText = coverageInfo?.isStart
+                      ? (canonicalEntry?.text ?? "")
+                      : "";
+                    const displayColor = canonicalEntry?.color ?? "";
 
-                  const dayName = DAY_NAMES[day.getDay()];
-                  const cellAriaLabel = isContinuation
-                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, continuation of ${canonicalEntry?.text ?? "task"}`
-                    : displayText
-                    ? `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}: ${displayText}`
-                    : `${dayName}, ${fmtHour(hour)} to ${fmtHour(hour + 1)}, empty`;
+                    const dayName = DAY_NAMES[day.getDay()];
+                    const slotStart = fmtTime(hour, minute);
+                    const slotEnd = fmtTime(nextHour, nextMinute);
+                    const cellAriaLabel = isContinuation
+                      ? `${dayName}, ${slotStart} to ${slotEnd}, continuation of ${canonicalEntry?.text ?? "task"}`
+                      : displayText
+                      ? `${dayName}, ${slotStart} to ${slotEnd}: ${displayText}`
+                      : `${dayName}, ${slotStart} to ${slotEnd}, empty`;
 
-                  const isCurrentCell = isSameDay(day, now) && hour === now.getHours();
-                  const nowPct = isCurrentCell ? (now.getMinutes() / 60) * 100 : undefined;
+                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                    const slotMinutes = hour * 60 + minute;
+                    const isCurrentSlot =
+                      isSameDay(day, now) &&
+                      nowMinutes >= slotMinutes &&
+                      nowMinutes < slotMinutes + 30;
+                    const nowPct = isCurrentSlot
+                      ? ((nowMinutes - slotMinutes) / 30) * 100
+                      : undefined;
 
-                  return (
-                    <TimetableCell
-                      key={i}
-                      savedText={displayText}
-                      savedColor={displayColor}
-                      isToday={isSameDay(day, today)}
-                      isDark={isDark}
-                      cellAriaLabel={cellAriaLabel}
-                      nowPct={nowPct}
-                      isContinuation={isContinuation}
-                      onActivate={() => startEdit(canonicalKey)}
-                      onDeleteRequest={() => setDeletingKey(canonicalKey)}
-                    />
-                  );
-                })}
-              </tr>
-            ))}
+                    return (
+                      <TimetableCell
+                        key={i}
+                        savedText={displayText}
+                        savedColor={displayColor}
+                        isToday={isSameDay(day, today)}
+                        isDark={isDark}
+                        cellAriaLabel={cellAriaLabel}
+                        nowPct={nowPct}
+                        isContinuation={isContinuation}
+                        isHalfHour={isHalfHour}
+                        onActivate={() => startEdit(canonicalKey)}
+                        onDeleteRequest={() => setDeletingKey(canonicalKey)}
+                      />
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -633,16 +688,19 @@ export default function TimetableView() {
                   onValueChange={(v) => {
                     const newStart = Number(v);
                     setDraftStartHour(newStart);
-                    setDraftEndHour((prev) => Math.max(prev, newStart + 1));
+                    setDraftEndHour((prev) => Math.max(prev, newStart + 0.5));
                   }}
                 >
                   <SelectTrigger className="flex-1" aria-label="Start time">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {HOUR_SLOTS.map((h) => (
-                      <SelectItem key={h} value={String(h)}>
-                        {fmtHour(h)}
+                    {TIME_SLOTS.map(({ hour, minute }) => (
+                      <SelectItem
+                        key={`${hour}-${minute}`}
+                        value={String(hour + minute / 60)}
+                      >
+                        {fmtTime(hour, minute)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -658,9 +716,12 @@ export default function TimetableView() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {endHourOptions.map((h) => (
-                      <SelectItem key={h} value={String(h)}>
-                        {fmtHour(h)}
+                    {endTimeOptions.map(({ hour, minute }) => (
+                      <SelectItem
+                        key={`${hour}-${minute}`}
+                        value={String(hour + minute / 60)}
+                      >
+                        {fmtTime(hour, minute)}
                       </SelectItem>
                     ))}
                   </SelectContent>
