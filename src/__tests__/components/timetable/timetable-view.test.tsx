@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import TimetableView from "@/components/timetable/timetable-view";
+import TimetableView, { findConflictingKeys } from "@/components/timetable/timetable-view";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -872,5 +872,256 @@ describe("TimetableView", () => {
         )
       );
     });
+  });
+});
+
+// ── findConflictingKeys unit tests ────────────────────────────────────────────
+
+describe("findConflictingKeys", () => {
+  // Mon 16 Mar 2026 — a real Monday for deterministic day names
+  const MONDAY = new Date("2026-03-16T00:00:00");
+  const days = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(MONDAY);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+
+  const entry = (text: string, endHour?: number, repeatAllDays?: boolean) => ({
+    text,
+    color: "" as const,
+    ...(endHour !== undefined ? { endHour } : {}),
+    ...(repeatAllDays !== undefined ? { repeatAllDays } : {}),
+  });
+
+  it("returns empty array when no tasks exist", () => {
+    expect(
+      findConflictingKeys("monday-0900", "monday", 9, 9.5, false, {}, days)
+    ).toEqual([]);
+  });
+
+  it("returns empty array when tasks exist on different days", () => {
+    const tasks = { "tuesday-0900": entry("Other", 9.5) };
+    expect(
+      findConflictingKeys("monday-0900", "monday", 9, 9.5, false, tasks, days)
+    ).toEqual([]);
+  });
+
+  it("returns empty array when tasks are at non-overlapping times", () => {
+    const tasks = { "monday-1000": entry("Later task", 10.5) };
+    expect(
+      findConflictingKeys("monday-0900", "monday", 9, 9.5, false, tasks, days)
+    ).toEqual([]);
+  });
+
+  it("returns conflicting key when another task occupies the exact same slot", () => {
+    const tasks = { "monday-0900": entry("Occupied") };
+    // editingKey is a different cell so monday-0900 is NOT excluded
+    const conflicts = findConflictingKeys("monday-1000", "monday", 9, 9.5, false, tasks, days);
+    expect(conflicts).toEqual(["monday-0900"]);
+  });
+
+  it("excludes editingKey itself from conflict detection", () => {
+    const tasks = { "monday-0900": entry("My task", 10.5) };
+    expect(
+      findConflictingKeys("monday-0900", "monday", 9, 10.5, false, tasks, days)
+    ).toEqual([]);
+  });
+
+  it("detects overlap when new task starts inside an existing task's range", () => {
+    const tasks = { "monday-0900": entry("Long task", 10.5) };
+    const conflicts = findConflictingKeys("monday-0930", "monday", 9.5, 10, false, tasks, days);
+    expect(conflicts).toContain("monday-0900");
+  });
+
+  it("detects overlap when new task ends inside an existing task's range", () => {
+    const tasks = { "monday-1000": entry("Short task") };
+    const conflicts = findConflictingKeys("monday-0930", "monday", 9.5, 10.5, false, tasks, days);
+    expect(conflicts).toContain("monday-1000");
+  });
+
+  it("detects overlap when new task completely contains an existing task", () => {
+    const tasks = { "monday-0930": entry("Inner task") };
+    const conflicts = findConflictingKeys("monday-0900", "monday", 9, 11, false, tasks, days);
+    expect(conflicts).toContain("monday-0930");
+  });
+
+  it("returns all conflicting keys when multiple tasks overlap", () => {
+    const tasks = {
+      "monday-0930": entry("Task A"),
+      "monday-1000": entry("Task B"),
+    };
+    const conflicts = findConflictingKeys("monday-0900", "monday", 9, 10.5, false, tasks, days);
+    expect(conflicts).toContain("monday-0930");
+    expect(conflicts).toContain("monday-1000");
+    expect(conflicts).toHaveLength(2);
+  });
+
+  it("detects conflict with a repeating task that occupies the same slot", () => {
+    const tasks = { "monday-0900": entry("Daily standup", undefined, true) };
+    const conflicts = findConflictingKeys("wednesday-0900", "wednesday", 9, 9.5, false, tasks, days);
+    expect(conflicts).toContain("monday-0900");
+  });
+
+  it("detects conflicts across all days for a new repeating task", () => {
+    const tasks = {
+      "tuesday-1000": entry("Tuesday meeting"),
+      "thursday-1000": entry("Thursday meeting"),
+    };
+    const conflicts = findConflictingKeys("monday-1000", "monday", 10, 10.5, true, tasks, days);
+    expect(conflicts).toContain("tuesday-1000");
+    expect(conflicts).toContain("thursday-1000");
+  });
+
+  it("does not flag adjacent tasks as conflicts (end == start of next)", () => {
+    const tasks = { "monday-0900": entry("Early task") };
+    expect(
+      findConflictingKeys("monday-0930", "monday", 9.5, 10, false, tasks, days)
+    ).toEqual([]);
+  });
+});
+
+// ── Overlap conflict dialog integration tests ─────────────────────────────────
+
+describe("TimetableView — overlap conflict dialog", () => {
+  beforeEach(() => {
+    mockUseTheme.mockReturnValue({ resolvedTheme: "light" });
+    global.fetch = jest.fn().mockResolvedValue({
+      json: async () => ({ entries: {} }),
+    });
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  /**
+   * Load entries where "Long task" (09:00–10:30) overlaps with "Standup" (10:00–10:30).
+   * Editing and re-saving "Long task" unchanged will trigger the conflict dialog.
+   */
+  async function loadConflictScenario() {
+    await renderAndLoad({
+      "monday-0900": { text: "Long task", color: "", endHour: 10.5 },
+      "monday-1000": { text: "Standup", color: "" },
+    });
+    await waitFor(() => screen.getByText("Long task"));
+  }
+
+  it("shows conflict dialog when saving a task that overlaps another", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+  });
+
+  it("conflict dialog shows the conflicting task's name", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+    // The dialog description should mention the conflicting task name
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/Standup/);
+  });
+
+  it("Cancel button dismisses the dialog without changing tasks", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("heading", { name: "Time conflict" })).not.toBeInTheDocument();
+    expect(screen.getByText("Long task")).toBeInTheDocument();
+  });
+
+  it("Cancel sends no additional API requests", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+    const callsBefore = (global.fetch as jest.Mock).mock.calls.length;
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect((global.fetch as jest.Mock).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("Replace removes the conflicting task from the grid", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Time conflict" })).not.toBeInTheDocument()
+    );
+    expect(screen.queryByText("Standup")).not.toBeInTheDocument();
+    expect(screen.getByText("Long task")).toBeInTheDocument();
+  });
+
+  it("Replace sends DELETE for the conflicting task and POST for the saved task", async () => {
+    const user = userEvent.setup();
+    await loadConflictScenario();
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Long task/ }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Time conflict" })).toBeInTheDocument()
+    );
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+
+    await waitFor(() => {
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const deleteCalls = calls.filter(([, opts]: [string, RequestInit]) => opts?.method === "DELETE");
+      const postCalls = calls.filter(([, opts]: [string, RequestInit]) => opts?.method === "POST");
+      expect(
+        deleteCalls.some(([, opts]: [string, RequestInit]) =>
+          (opts.body as string).includes("monday-1000")
+        )
+      ).toBe(true);
+      expect(
+        postCalls.some(([, opts]: [string, RequestInit]) =>
+          (opts.body as string).includes('"task":"Long task"')
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("no conflict dialog when saving a task that does not overlap anything", async () => {
+    const user = userEvent.setup();
+    await renderAndLoad({ "monday-1000": { text: "Standup", color: "" } });
+    await waitFor(() => screen.getByText("Standup"));
+
+    await user.click(screen.getByRole("cell", { name: /Monday, 07:00 to 07:30, empty/ }));
+    await user.type(screen.getByRole("textbox"), "Morning task");
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("heading", { name: "Time conflict" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("Morning task")).toBeInTheDocument()
+    );
   });
 });

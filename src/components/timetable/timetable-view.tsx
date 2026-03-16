@@ -163,6 +163,51 @@ function buildCoverage(
   return coverage;
 }
 
+/**
+ * Returns the canonical keys of existing tasks that visually overlap with the
+ * given time range. The task currently being edited (editingKey) is excluded
+ * so that re-saving an unchanged task never triggers a false conflict.
+ *
+ * @param startTime  Float hours, e.g. 9.5 = 09:30
+ * @param endTime    Float hours, exclusive upper bound
+ */
+export function findConflictingKeys(
+  editingKey: string,
+  dayName: string,
+  startTime: number,
+  endTime: number,
+  repeatAllDays: boolean,
+  tasks: Record<string, Entry>,
+  days: Date[]
+): string[] {
+  const otherTasks: Record<string, Entry> = {};
+  for (const [k, v] of Object.entries(tasks)) {
+    if (k !== editingKey) otherTasks[k] = v;
+  }
+  const otherCoverage = buildCoverage(otherTasks, days);
+  const conflicting = new Set<string>();
+
+  const checkDay = (dn: string) => {
+    for (let t = startTime; t < endTime; t += 0.5) {
+      const h = Math.floor(t);
+      const m = Math.round((t % 1) * 60);
+      const cell = `${dn}-${String(h).padStart(2, "0")}${String(m).padStart(2, "0")}`;
+      const info = otherCoverage[cell];
+      if (info) conflicting.add(info.canonicalKey);
+    }
+  };
+
+  if (!repeatAllDays) {
+    checkDay(dayName);
+  } else {
+    for (const day of days) {
+      const dn = day.toLocaleDateString("en-GB", { weekday: "long" }).toLowerCase();
+      checkDay(dn);
+    }
+  }
+  return [...conflicting];
+}
+
 // --- Constants ---
 
 /** 28 half-hour slots: 06:00, 06:30, 07:00, … 19:00, 19:30 */
@@ -284,6 +329,19 @@ function TimetableCell({
   );
 }
 
+// --- Pending conflict ---
+
+interface PendingConflict {
+  oldKey: string;
+  newKey: string;
+  trimmed: string;
+  entry: Entry;
+  weekStr: string;
+  conflictingKeys: string[];
+  /** Whether tasks[oldKey] existed at the time commit() was called. */
+  hadExistingOldEntry: boolean;
+}
+
 // --- Main view ---
 
 export default function TimetableView() {
@@ -308,6 +366,7 @@ export default function TimetableView() {
   const [draftRepeatAllDays, setDraftRepeatAllDays] = useState(false);
   const [loadedWeek, setLoadedWeek] = useState("");
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
 
   const isLoading = loadedWeek !== toDateStr(weekStart);
 
@@ -355,28 +414,18 @@ export default function TimetableView() {
     setDraftRepeatAllDays(tasks[key]?.repeatAllDays ?? false);
   }
 
-  function commit() {
-    if (!editingKey) return;
-    const trimmed = draft.trim();
-    const oldKey = editingKey;
-    const { dayName } = parseCellKey(oldKey);
-    const newHour = Math.floor(draftStartHour);
-    const newMinute = Math.round((draftStartHour % 1) * 60);
-    const newKey = `${dayName}-${String(newHour).padStart(2, "0")}${String(newMinute).padStart(2, "0")}`;
-    const weekStr = toDateStr(weekStart);
-
-    // Optimistic update
+  function applyCommit(
+    oldKey: string,
+    newKey: string,
+    trimmed: string,
+    entry: Entry,
+    weekStr: string,
+    hadExistingOldEntry: boolean
+  ) {
     setTasks((prev) => {
       const next = { ...prev };
       delete next[oldKey];
-      if (trimmed) {
-        next[newKey] = {
-          text: trimmed,
-          color: draftColor,
-          endHour: draftEndHour,
-          repeatAllDays: draftRepeatAllDays,
-        };
-      }
+      if (trimmed) next[newKey] = entry;
       return next;
     });
     setEditingKey(null);
@@ -385,8 +434,7 @@ export default function TimetableView() {
     setDraftRepeatAllDays(false);
 
     if (trimmed) {
-      // If the start hour changed, remove the old canonical entry first
-      if (oldKey !== newKey && tasks[oldKey]) {
+      if (oldKey !== newKey && hadExistingOldEntry) {
         fetch("/api/timetable", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
@@ -400,18 +448,80 @@ export default function TimetableView() {
           weekStart: weekStr,
           cellKey: newKey,
           task: trimmed,
-          color: draftColor,
-          endHour: draftEndHour,
-          repeatAllDays: draftRepeatAllDays,
+          color: entry.color,
+          endHour: entry.endHour,
+          repeatAllDays: entry.repeatAllDays,
         }),
       }).catch(console.error);
-    } else if (tasks[oldKey]) {
+    } else if (hadExistingOldEntry) {
       fetch("/api/timetable", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ weekStart: weekStr, cellKey: oldKey }),
       }).catch(console.error);
     }
+  }
+
+  function commit() {
+    if (!editingKey) return;
+    const trimmed = draft.trim();
+    const oldKey = editingKey;
+    const { dayName } = parseCellKey(oldKey);
+    const newHour = Math.floor(draftStartHour);
+    const newMinute = Math.round((draftStartHour % 1) * 60);
+    const newKey = `${dayName}-${String(newHour).padStart(2, "0")}${String(newMinute).padStart(2, "0")}`;
+    const weekStr = toDateStr(weekStart);
+    const hadExistingOldEntry = !!tasks[oldKey];
+    const entry: Entry = {
+      text: trimmed,
+      color: draftColor,
+      endHour: draftEndHour,
+      repeatAllDays: draftRepeatAllDays,
+    };
+
+    if (trimmed) {
+      const conflicts = findConflictingKeys(
+        oldKey,
+        dayName,
+        draftStartHour,
+        draftEndHour,
+        draftRepeatAllDays,
+        tasks,
+        days
+      );
+      if (conflicts.length > 0) {
+        setEditingKey(null);
+        setDraft("");
+        setDraftColor("");
+        setDraftRepeatAllDays(false);
+        setPendingConflict({ oldKey, newKey, trimmed, entry, weekStr, conflictingKeys: conflicts, hadExistingOldEntry });
+        return;
+      }
+    }
+
+    applyCommit(oldKey, newKey, trimmed, entry, weekStr, hadExistingOldEntry);
+  }
+
+  function resolveConflict(replace: boolean) {
+    if (!pendingConflict) return;
+    const { oldKey, newKey, trimmed, entry, weekStr, conflictingKeys, hadExistingOldEntry } = pendingConflict;
+    setPendingConflict(null);
+    if (!replace) return;
+
+    setTasks((prev) => {
+      const next = { ...prev };
+      for (const k of conflictingKeys) delete next[k];
+      return next;
+    });
+    for (const k of conflictingKeys) {
+      fetch("/api/timetable", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weekStart: weekStr, cellKey: k }),
+      }).catch(console.error);
+    }
+
+    applyCommit(oldKey, newKey, trimmed, entry, weekStr, hadExistingOldEntry);
   }
 
   function cancel() {
@@ -782,6 +892,34 @@ export default function TimetableView() {
             </Button>
             <Button onClick={commit}>
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Overlap conflict dialog ── */}
+      <Dialog
+        open={!!pendingConflict}
+        onOpenChange={(open) => { if (!open) resolveConflict(false); }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Time conflict</DialogTitle>
+            <DialogDescription>
+              The new event overlaps with{" "}
+              {pendingConflict?.conflictingKeys.length === 1
+                ? `"${tasks[pendingConflict.conflictingKeys[0]]?.text ?? "an existing event"}"`
+                : `${pendingConflict?.conflictingKeys.length} existing events`}
+              . Replace the existing event
+              {(pendingConflict?.conflictingKeys.length ?? 0) > 1 ? "s" : ""} or cancel?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => resolveConflict(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => resolveConflict(true)}>
+              Replace
             </Button>
           </DialogFooter>
         </DialogContent>
