@@ -64,23 +64,29 @@ describe("TimetableView", () => {
       expect(colHeaders).toHaveLength(6);
     });
 
-    it("renders exactly 14 hour-row headers (06:00–19:00)", async () => {
+    it("renders exactly 28 half-hour row headers (06:00–19:30)", async () => {
       await renderAndLoad();
       const rowHeaders = screen.getAllByRole("rowheader");
-      expect(rowHeaders).toHaveLength(14);
+      expect(rowHeaders).toHaveLength(28);
     });
 
-    it("labels the first hour slot 06:00 to 07:00", async () => {
+    it("labels the first slot 06:00 to 06:30", async () => {
       await renderAndLoad();
       const rowHeaders = screen.getAllByRole("rowheader");
-      expect(rowHeaders[0]).toHaveAccessibleName("06:00 to 07:00");
+      expect(rowHeaders[0]).toHaveAccessibleName("06:00 to 06:30");
     });
 
-    it("labels the last hour slot 19:00 to 20:00", async () => {
+    it("labels the second slot 06:30 to 07:00", async () => {
+      await renderAndLoad();
+      const rowHeaders = screen.getAllByRole("rowheader");
+      expect(rowHeaders[1]).toHaveAccessibleName("06:30 to 07:00");
+    });
+
+    it("labels the last slot 19:30 to 20:00", async () => {
       await renderAndLoad();
       const rowHeaders = screen.getAllByRole("rowheader");
       expect(rowHeaders[rowHeaders.length - 1]).toHaveAccessibleName(
-        "19:00 to 20:00"
+        "19:30 to 20:00"
       );
     });
 
@@ -98,6 +104,27 @@ describe("TimetableView", () => {
         screen.getAllByRole("columnheader", { name: /Monday/ }).length
       ).toBeGreaterThanOrEqual(1);
     });
+
+    it(":30 rows have data-halfhour attribute (solid o'clock border)", async () => {
+      await renderAndLoad();
+      // 14 half-hour (:30) rows × 5 day cells = 70 cells with data-halfhour
+      const halfHourCells = document.querySelectorAll('[data-halfhour="true"]');
+      expect(halfHourCells.length).toBe(70);
+    });
+
+    it(":00 rows do not have data-halfhour attribute (dashed half-hour separator)", async () => {
+      await renderAndLoad();
+      const cells = screen.getAllByRole("cell");
+      const halfHourCells = cells.filter(
+        (c) => c.getAttribute("data-halfhour") === "true"
+      );
+      const fullHourCells = cells.filter(
+        (c) => c.getAttribute("data-halfhour") !== "true"
+      );
+      // 14 :30 rows + 14 :00 rows, each with 5 day cells
+      expect(halfHourCells.length).toBe(70);
+      expect(fullHourCells.length).toBe(70);
+    });
   });
 
   // ── API loading ──────────────────────────────────────────────────────────
@@ -111,7 +138,7 @@ describe("TimetableView", () => {
     });
 
     it("renders a saved entry returned from the API", async () => {
-      await renderAndLoad({ "monday-09": { text: "Team meeting", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Team meeting", color: "" } });
       await waitFor(() =>
         expect(screen.getByText("Team meeting")).toBeInTheDocument()
       );
@@ -216,7 +243,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       const cell = screen.getByRole("cell", {
-        name: /Monday, 06:00 to 07:00/,
+        name: /Monday, 06:00 to 06:30/,
       });
       await user.click(cell);
       expect(screen.getByRole("textbox")).toBeInTheDocument();
@@ -227,7 +254,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       expect(screen.getByRole("combobox", { name: "Start time" })).toBeInTheDocument();
       expect(screen.getByRole("combobox", { name: "End time" })).toBeInTheDocument();
@@ -238,17 +265,37 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00, empty/ })
+        screen.getByRole("cell", { name: /Monday, 09:00 to 09:30, empty/ })
       );
       const startTrigger = screen.getByRole("combobox", { name: "Start time" });
       expect(startTrigger).toHaveTextContent("09:00");
     });
 
-    it("end time defaults to start time + 1 hour", async () => {
+    it("start time defaults to the clicked cell half-hour", async () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00, empty/ })
+        screen.getByRole("cell", { name: /Monday, 09:30 to 10:00, empty/ })
+      );
+      const startTrigger = screen.getByRole("combobox", { name: "Start time" });
+      expect(startTrigger).toHaveTextContent("09:30");
+    });
+
+    it("end time defaults to start time + 30 minutes", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 09:00 to 09:30, empty/ })
+      );
+      const endTrigger = screen.getByRole("combobox", { name: "End time" });
+      expect(endTrigger).toHaveTextContent("09:30");
+    });
+
+    it("end time defaults to start time + 30 minutes from a :30 slot", async () => {
+      const user = userEvent.setup();
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 09:30 to 10:00, empty/ })
       );
       const endTrigger = screen.getByRole("combobox", { name: "End time" });
       expect(endTrigger).toHaveTextContent("10:00");
@@ -258,7 +305,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       expect(
         screen.getByRole("button", { name: "No colour" })
@@ -274,7 +321,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       await user.type(screen.getByRole("textbox"), "Stand-up");
       await user.keyboard("{Enter}");
@@ -287,7 +334,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       await user.type(screen.getByRole("textbox"), "Discarded");
       await user.keyboard("{Escape}");
@@ -300,7 +347,7 @@ describe("TimetableView", () => {
       const user = userEvent.setup();
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       // Leave textarea empty, press Enter
       await user.keyboard("{Enter}");
@@ -308,7 +355,7 @@ describe("TimetableView", () => {
       // No text content should have been added
       expect(
         screen.queryByRole("cell", {
-          name: /Monday, 06:00 to 07:00: /,
+          name: /Monday, 06:00 to 06:30: /,
         })
       ).not.toBeInTheDocument();
     });
@@ -320,7 +367,7 @@ describe("TimetableView", () => {
       });
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       await user.type(screen.getByRole("textbox"), "Deep work");
       await user.keyboard("{Enter}");
@@ -335,6 +382,28 @@ describe("TimetableView", () => {
       });
     });
 
+    it("POST cellKey uses HHMM format", async () => {
+      const user = userEvent.setup();
+      (global.fetch as jest.Mock).mockResolvedValue({
+        json: async () => ({ entries: {} }),
+      });
+      await renderAndLoad();
+      await user.click(
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
+      );
+      await user.type(screen.getByRole("textbox"), "Early task");
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => {
+        const calls = (global.fetch as jest.Mock).mock.calls;
+        const postCall = calls.find(
+          ([, opts]: [string, RequestInit]) => opts?.method === "POST"
+        );
+        expect(postCall).toBeDefined();
+        expect(postCall[1].body).toContain("monday-0600");
+      });
+    });
+
     it("POST body includes endHour and repeatAllDays", async () => {
       const user = userEvent.setup();
       (global.fetch as jest.Mock).mockResolvedValue({
@@ -342,7 +411,7 @@ describe("TimetableView", () => {
       });
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       await user.type(screen.getByRole("textbox"), "Morning block");
       await user.keyboard("{Enter}");
@@ -365,7 +434,7 @@ describe("TimetableView", () => {
       });
       await renderAndLoad();
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 06:00 to 07:00/ })
+        screen.getByRole("cell", { name: /Monday, 06:00 to 06:30/ })
       );
       await user.type(screen.getByRole("textbox"), "Coloured task");
 
@@ -393,12 +462,12 @@ describe("TimetableView", () => {
 
   describe("entry display", () => {
     it("shows the saved task text in the cell", async () => {
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => expect(screen.getByText("Yoga")).toBeInTheDocument());
     });
 
     it("shows a delete button on a cell that has an entry", async () => {
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
       expect(
         screen.getByRole("button", { name: "Delete entry" })
@@ -407,21 +476,21 @@ describe("TimetableView", () => {
 
     it("clicking a cell with an existing entry pre-fills the textarea", async () => {
       const user = userEvent.setup();
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00/ })
+        screen.getByRole("cell", { name: /Monday, 09:00 to 09:30/ })
       );
       expect(screen.getByRole("textbox")).toHaveValue("Yoga");
     });
   });
 
-  // ── Multi-hour spanning ──────────────────────────────────────────────────
+  // ── Multi-slot spanning ──────────────────────────────────────────────────
 
-  describe("multi-hour task spanning", () => {
-    it("shows task text only in the first hour slot", async () => {
+  describe("multi-slot task spanning", () => {
+    it("shows task text only in the first slot", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "blue", endHour: 11 },
       });
       await waitFor(() => expect(screen.getByText("Deep work")).toBeInTheDocument());
       // Text appears exactly once
@@ -430,54 +499,61 @@ describe("TimetableView", () => {
 
     it("labels the first slot with the task text", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "blue", endHour: 11 },
       });
       await waitFor(() => screen.getByText("Deep work"));
       expect(
-        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00: Deep work/ })
+        screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Deep work/ })
       ).toBeInTheDocument();
     });
 
     it("labels subsequent slots as continuations", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "blue", endHour: 11 },
       });
       await waitFor(() => screen.getByText("Deep work"));
+      // Multiple continuation cells (09:30, 10:00, 10:30)
       expect(
-        screen.getByRole("cell", { name: /Monday, 10:00 to 11:00, continuation of Deep work/ })
+        screen.getByRole("cell", { name: /Monday, 09:30 to 10:00, continuation of Deep work/ })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("cell", { name: /Monday, 10:00 to 10:30, continuation of Deep work/ })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("cell", { name: /Monday, 10:30 to 11:00, continuation of Deep work/ })
       ).toBeInTheDocument();
     });
 
     it("does not show a delete button on continuation cells", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "blue", endHour: 11 },
       });
       await waitFor(() => screen.getByText("Deep work"));
-      // Only one delete button (on the start cell), not on the continuation
+      // Only one delete button (on the start cell), not on continuations
       expect(screen.getAllByRole("button", { name: "Delete entry" })).toHaveLength(1);
     });
 
     it("clicking a continuation cell opens the edit dialog for the canonical task", async () => {
       const user = userEvent.setup();
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "blue", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "blue", endHour: 11 },
       });
       await waitFor(() => screen.getByText("Deep work"));
       const continuationCell = screen.getByRole("cell", {
-        name: /Monday, 10:00 to 11:00, continuation of Deep work/,
+        name: /Monday, 09:30 to 10:00, continuation of Deep work/,
       });
       await user.click(continuationCell);
       expect(screen.getByRole("textbox")).toHaveValue("Deep work");
     });
 
-    it("start time select is pre-filled when editing a multi-hour task", async () => {
+    it("start and end time selects are pre-filled when editing a multi-slot task", async () => {
       const user = userEvent.setup();
       await renderAndLoad({
-        "monday-09": { text: "Deep work", color: "", endHour: 11 },
+        "monday-0900": { text: "Deep work", color: "", endHour: 11 },
       });
       await waitFor(() => screen.getByText("Deep work"));
       await user.click(
-        screen.getByRole("cell", { name: /Monday, 09:00 to 10:00: Deep work/ })
+        screen.getByRole("cell", { name: /Monday, 09:00 to 09:30: Deep work/ })
       );
       expect(
         screen.getByRole("combobox", { name: "Start time" })
@@ -486,6 +562,20 @@ describe("TimetableView", () => {
         screen.getByRole("combobox", { name: "End time" })
       ).toHaveTextContent("11:00");
     });
+
+    it("tasks with half-hour start time span correctly", async () => {
+      await renderAndLoad({
+        "monday-0930": { text: "Half-hour start", color: "", endHour: 10.5 },
+      });
+      await waitFor(() => screen.getByText("Half-hour start"));
+      // Spans 09:30–10:30 (2 half-hour slots)
+      expect(
+        screen.getByRole("cell", { name: /Monday, 09:30 to 10:00: Half-hour start/ })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("cell", { name: /Monday, 10:00 to 10:30, continuation of Half-hour start/ })
+      ).toBeInTheDocument();
+    });
   });
 
   // ── Repeat every weekday ─────────────────────────────────────────────────
@@ -493,22 +583,22 @@ describe("TimetableView", () => {
   describe("repeat every weekday", () => {
     it("shows a repeating task in all 5 weekday columns", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Daily standup", color: "", repeatAllDays: true },
+        "monday-0900": { text: "Daily standup", color: "", repeatAllDays: true },
       });
       await waitFor(() =>
         expect(screen.getAllByText("Daily standup")).toHaveLength(5)
       );
     });
 
-    it("each weekday shows the task text in the correct hour row", async () => {
+    it("each weekday shows the task text in the correct half-hour row", async () => {
       await renderAndLoad({
-        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+        "monday-0900": { text: "Standup", color: "", repeatAllDays: true },
       });
       await waitFor(() => screen.getAllByText("Standup"));
-      // Monday, Tuesday, Wednesday, Thursday, Friday — all at 09:00-10:00
+      // Monday, Tuesday, Wednesday, Thursday, Friday — all at 09:00-09:30
       for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) {
         expect(
-          screen.getByRole("cell", { name: new RegExp(`${day}, 09:00 to 10:00: Standup`) })
+          screen.getByRole("cell", { name: new RegExp(`${day}, 09:00 to 09:30: Standup`) })
         ).toBeInTheDocument();
       }
     });
@@ -516,11 +606,11 @@ describe("TimetableView", () => {
     it("clicking any repeated cell opens the edit dialog with repeatAllDays checked", async () => {
       const user = userEvent.setup();
       await renderAndLoad({
-        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+        "monday-0900": { text: "Standup", color: "", repeatAllDays: true },
       });
       await waitFor(() => screen.getAllByText("Standup"));
       await user.click(
-        screen.getByRole("cell", { name: /Wednesday, 09:00 to 10:00: Standup/ })
+        screen.getByRole("cell", { name: /Wednesday, 09:00 to 09:30: Standup/ })
       );
       const checkbox = screen.getByRole("checkbox", { name: /Repeat every weekday/ });
       expect(checkbox).toBeChecked();
@@ -533,7 +623,7 @@ describe("TimetableView", () => {
         json: async () => ({ entries: {} }),
       });
       await renderAndLoad({
-        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
+        "monday-0900": { text: "Standup", color: "", repeatAllDays: true },
       });
       await waitFor(() => screen.getAllByText("Standup"));
 
@@ -552,12 +642,12 @@ describe("TimetableView", () => {
         ([, opts]: [string, RequestInit]) => opts?.method === "DELETE"
       );
       expect(deleteCall).toBeDefined();
-      expect(deleteCall[1].body).toContain("monday-09");
+      expect(deleteCall[1].body).toContain("monday-0900");
     });
 
-    it("multi-hour repeated task shows continuations on each weekday", async () => {
+    it("multi-slot repeated task shows continuations on each weekday", async () => {
       await renderAndLoad({
-        "monday-09": {
+        "monday-0900": {
           text: "Focus block",
           color: "green",
           endHour: 11,
@@ -567,27 +657,27 @@ describe("TimetableView", () => {
       await waitFor(() =>
         expect(screen.getAllByText("Focus block")).toHaveLength(5)
       );
-      // There should be 5 continuation cells (10:00-11:00 for each day)
+      // There should be continuation cells for 09:30 on each day
       for (const day of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) {
         expect(
           screen.getByRole("cell", {
-            name: new RegExp(`${day}, 10:00 to 11:00, continuation of Focus block`),
+            name: new RegExp(`${day}, 09:30 to 10:00, continuation of Focus block`),
           })
         ).toBeInTheDocument();
       }
     });
 
-    it("non-repeating task at the same hour takes precedence over a repeating one", async () => {
+    it("non-repeating task at the same slot takes precedence over a repeating one", async () => {
       await renderAndLoad({
         // Repeating task owned by Monday
-        "monday-09": { text: "Standup", color: "", repeatAllDays: true },
-        // Specific task on Wednesday at the same hour
-        "wednesday-09": { text: "1:1 meeting", color: "blue" },
+        "monday-0900": { text: "Standup", color: "", repeatAllDays: true },
+        // Specific task on Wednesday at the same slot
+        "wednesday-0900": { text: "1:1 meeting", color: "blue" },
       });
       await waitFor(() => screen.getByText("1:1 meeting"));
       // Wednesday should show the specific task, not the repeated one
       expect(
-        screen.getByRole("cell", { name: /Wednesday, 09:00 to 10:00: 1:1 meeting/ })
+        screen.getByRole("cell", { name: /Wednesday, 09:00 to 09:30: 1:1 meeting/ })
       ).toBeInTheDocument();
       // Standup should appear only on the 4 remaining days
       expect(screen.getAllByText("Standup")).toHaveLength(4);
@@ -599,7 +689,7 @@ describe("TimetableView", () => {
   describe("delete flow", () => {
     it("clicking the delete button opens a confirmation dialog", async () => {
       const user = userEvent.setup();
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
 
       await user.click(screen.getByRole("button", { name: "Delete entry" }));
@@ -612,7 +702,7 @@ describe("TimetableView", () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         json: async () => ({ entries: {} }),
       });
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
 
       await user.click(screen.getByRole("button", { name: "Delete entry" }));
@@ -630,7 +720,7 @@ describe("TimetableView", () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         json: async () => ({ entries: {} }),
       });
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
 
       await user.click(screen.getByRole("button", { name: "Delete entry" }));
@@ -648,7 +738,7 @@ describe("TimetableView", () => {
 
     it("cancelling the dialog keeps the entry", async () => {
       const user = userEvent.setup();
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
 
       await user.click(screen.getByRole("button", { name: "Delete entry" }));
@@ -659,7 +749,7 @@ describe("TimetableView", () => {
 
     it("cancelling the dialog sends no DELETE request", async () => {
       const user = userEvent.setup();
-      await renderAndLoad({ "monday-09": { text: "Yoga", color: "" } });
+      await renderAndLoad({ "monday-0900": { text: "Yoga", color: "" } });
       await waitFor(() => screen.getByText("Yoga"));
 
       const callsBefore = (global.fetch as jest.Mock).mock.calls.length;
@@ -676,7 +766,7 @@ describe("TimetableView", () => {
     it("renders without errors in dark mode", async () => {
       mockUseTheme.mockReturnValue({ resolvedTheme: "dark" });
       await renderAndLoad({
-        "monday-09": { text: "Dark task", color: "blue" },
+        "monday-0900": { text: "Dark task", color: "blue" },
       });
       await waitFor(() =>
         expect(screen.getByText("Dark task")).toBeInTheDocument()
@@ -687,7 +777,7 @@ describe("TimetableView", () => {
   // ── Current time indicator ────────────────────────────────────────────────
 
   describe("current time indicator", () => {
-    // 2026-03-02 is a Monday — within the grid range (10:00 slot)
+    // 2026-03-02 is a Monday — within the grid range
     const MONDAY_10_30 = new Date("2026-03-02T10:30:00");
     const MONDAY_10_00 = new Date("2026-03-02T10:00:00");
     const MONDAY_05_59 = new Date("2026-03-02T05:59:00");
@@ -709,19 +799,29 @@ describe("TimetableView", () => {
       ).toBeInTheDocument();
     });
 
-    it("positions the indicator at 50% within the slot at :30 minutes", async () => {
+    it("positions the indicator at 0% at the start of the 10:30 slot", async () => {
+      // At 10:30 exactly, we're at the start of the 10:30–11:00 slot
       jest.setSystemTime(MONDAY_10_30);
       await renderAndLoad();
       expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
-        "top: 50%"
+        "top: 0%"
       );
     });
 
-    it("positions the indicator at 0% at the exact start of an hour", async () => {
+    it("positions the indicator at 0% at the exact start of an hour slot", async () => {
       jest.setSystemTime(MONDAY_10_00);
       await renderAndLoad();
       expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
         "top: 0%"
+      );
+    });
+
+    it("positions the indicator at 50% at 15 minutes into a 30-min slot", async () => {
+      // 10:15 → 15 min into the 10:00 slot → 15/30 = 50%
+      jest.setSystemTime(new Date("2026-03-02T10:15:00"));
+      await renderAndLoad();
+      expect(screen.getByTestId("current-time-indicator")).toHaveStyle(
+        "top: 50%"
       );
     });
 
@@ -757,13 +857,11 @@ describe("TimetableView", () => {
     });
 
     it("updates position after one minute elapses", async () => {
-      // Start at 10:29 so that advancing 60 s lands the system clock at 10:30
-      jest.setSystemTime(new Date("2026-03-02T10:29:00"));
+      // Start at 10:14 so that advancing 60s lands at 10:15 → 50% in the 10:00 slot
+      jest.setSystemTime(new Date("2026-03-02T10:14:00"));
       await renderAndLoad();
       expect(screen.getByTestId("current-time-indicator")).toBeInTheDocument();
 
-      // Advancing fake timers also shifts Date.now() by the same amount,
-      // so the interval callback receives new Date() === 10:30:00 → top: 50%
       act(() => {
         jest.advanceTimersByTime(60_000);
       });
